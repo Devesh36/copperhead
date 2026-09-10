@@ -159,12 +159,12 @@ program
     }
   });
 
-const checkAction = async (): Promise<void> => {
+const checkAction = async (opts: { strictSourcing?: boolean } = {}): Promise<void> => {
   const repo = repoOf(program.opts());
   const json = Boolean(program.opts().json);
   try {
     await kicadCliVersion();
-    const res = await runCheck(repo, json ? () => {} : (s) => console.log(s));
+    const res = await runCheck(repo, json ? () => {} : (s) => console.log(s), opts.strictSourcing ?? false);
     if (json) console.log(JSON.stringify(res, null, 2));
     process.exit(res.ok ? 0 : 1);
   } catch (err) {
@@ -177,6 +177,7 @@ program
   .command('check')
   .alias('verify')
   .description('ERC + DRC + doc-drift + spec validation; no LLM calls; CI-safe')
+  .option('--strict-sourcing', 'treat stale/zero-stock/missing sourcing evidence as failures')
   .action(checkAction);
 
 // `draft` and `score` are command groups taking the artifact as a noun

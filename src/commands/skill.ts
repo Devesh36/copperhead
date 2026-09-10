@@ -67,9 +67,10 @@ export function formatSkillEnvelope(result: ToolResult, json: boolean): string {
 async function minimalCtx(repoRoot: string, initializeTranscript = true): Promise<RunContext> {
   const transcript = new Transcript(repoRoot);
   if (initializeTranscript) await transcript.init();
+  const config = await loadConfig(repoRoot);
   return {
     repoRoot,
-    config: await loadConfig(repoRoot),
+    config,
     transcript,
     ledger: new ObligationsLedger(),
     runId: 'skill',
@@ -86,6 +87,7 @@ async function minimalCtx(repoRoot: string, initializeTranscript = true): Promis
     lastScore: null,
     lastDrift: null,
     repairCycles: 0,
+    ...(config.research?.enabled ? { networkRequests: 0, datasheetsCached: 0, sourcingSnapshotsWritten: 0 } : {}),
     finishRequest: null,
   };
 }

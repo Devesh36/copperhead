@@ -323,6 +323,7 @@ export interface TableRow {
         const mpn = row.cells[mpnI];
         const flags: string[] = [];
         if (mpn === 'UNVERIFIED') flags.push('UNVERIFIED');
+        if (row.cells.some((c) => /VERIFIED\(datasheet\)/i.test(c))) flags.push('VERIFIED(datasheet)');
         else if (!mpn) flags.push('MISSING_MPN');
         out.push({
           refdes,

@@ -1,5 +1,9 @@
 # add-part-research-tools: Proposal
 
+> Phase 1 re-ratification: this change is intentionally sequenced after
+> `formalize-tool-registry` (issue #246 Phase 0). Its research tools use the
+> registry's versioned schemas, structured envelopes, and predicate gates.
+
 ## Why
 
 The agent currently designs from trained knowledge alone: it cannot look up a datasheet, confirm a part exists, or check availability, so every new part is guesswork flagged `UNVERIFIED` and constraint sources cite datasheets nobody fetched. Grounding part selection and constraint discovery in real, current data removes the biggest credibility gap in `create`/`do` output, and pulls forward the "sourceable becomes a checked constraint" item from the Phase 3 roadmap (SPEC.md §8).
@@ -31,5 +35,5 @@ The agent currently designs from trained knowledge alone: it cannot look up a da
 - **Config**: `.copperhead/config.json` gains a `research` block (enable flag, host allowlist, supplier API selection); supplier API keys join the env-var-only rule and the `sk-` redaction pattern family.
 - **Repo layout**: `.copperhead/datasheets/` (committed cache) and its index; `.copperhead/runs/` transcripts gain a network-request log section.
 - **Docs**: SPEC.md §7 safety rail rewritten, §8 roadmap item marked pulled-forward; BOM.md flag vocabulary extended with `VERIFIED(datasheet)`.
-- **Dependencies**: one supplier API integration (design.md selects the provider); no new runtime beyond `fetch`.
+- **Dependencies**: `formalize-tool-registry` must be archived or its specs synced before this change is archived; the default supplier integration is the credential-free public JLCSearch API, with Nexar/Brave retained as optional providers; no new runtime beyond `fetch`.
 - **Unchanged contracts**: `check`/`verify` stay LLM-free and network-free (AC-2.1); spec-gating of edit tools is unaffected; research tools are read-only and never mutate repo files outside the datasheet cache.

@@ -355,6 +355,9 @@ It's a loop, and it looks a lot like pair-programming, except the codebase is a 
 | `export_svg` | (sch\|pcb) → path | For viewer + before/after diffing |
 | `check_drift` | () → [{doc, claim, actual}] | Compares doc tables (BOM/pinout) against parsed schematic |
 | `generate_report` | (scope?: power\|all) → report | Skill: nested read-only sub-run; ERC/DRC/drift/nets. Always in the catalog. |
+| `web_search` | (query) → metadata[] | Research-only, available when research is enabled, `searchProvider` is `brave`, and the Brave key is present |
+| `search_parts` | (query, mpn?, refdes?) → part[] | Normalized JLCSearch or Nexar sourcing data; selection can dual-write BOM and constraints |
+| `fetch_datasheet` | (url, mpn, refdes?, section?) → cache entry | Allowlisted PDF fetch; cache/index/text only, fetched content is untrusted data |
 
 ### 4.3 System prompt — key rules (verbatim requirements)
 
@@ -405,11 +408,22 @@ interface Provider {
   "model": "gpt-5",
   "maxTurns": 40,
   "stageMaxTurns": { "spec-seed": 60 },
-  "budgets": { "sleep_current_uA": 25 }
+  "budgets": { "sleep_current_uA": 25 },
+  "research": {
+    "enabled": false,
+    "provider": "jlcsearch",
+    "searchProvider": "none",
+    "allowHosts": ["jlcsearch.tscircuit.com", "wmsc.lcsc.com"],
+    "stalenessDays": 30,
+    "maxPdfMB": 10
+  }
 }
 ```
 
 `budgets` is free-form; keys are surfaced verbatim into the system prompt so the agent treats them as hard constraints. `stageMaxTurns` is optional: per-stage turn budgets for the create pipeline, keyed by stage name; stages without an entry use `maxTurns`.
+`research` is absent-by-default and must be explicitly enabled. The default
+JLCSearch provider requires no credentials. Optional provider keys remain
+environment-only; `check` never reads them and never performs network I/O.
 
 ---
 
@@ -428,18 +442,18 @@ Acceptance: type "add a second RGB LED on an RTC-capable pin" → watch schemati
 ## 7. Safety rails
 
 - Refuse to run `do` or `repl` on a dirty git tree (offer `--allow-dirty`, whose snapshot pairs a `git stash create` object for tracked changes with a tree object for untracked files, so the rollback restores both rather than letting `git clean` delete what the stash never captured). An untracked file that exists but cannot be read refuses the run by name: it cannot be snapshotted, and the rollback would delete it regardless, so proceeding would break exactly the promise `--allow-dirty` makes. Untracked paths that vanish before the snapshot is taken are skipped rather than refused
-- All file tools sandboxed to repo root; no network tools in Phase 1
+- All file tools sandboxed to repo root. Research network tools, when explicitly enabled, are structurally gated behind provider keys and a single host-allowlisted egress module; `check`/`verify` remains LLM-free and network-free
 - `.env` in `.gitignore` from first commit; keys only via env vars — never written to any file, transcript, or commit
-- Transcripts in `.copperhead/runs/` redact anything matching `sk-[A-Za-z0-9_-]+`
+- Transcripts and summaries in `.copperhead/runs/` redact known key formats and the values of environment variables ending in `_KEY`, `_SECRET`, or `_TOKEN`
 - The Codex CLI's native read access and `~/.codex/sessions/` logs are outside Copperhead's enforcement/redaction boundary; the Codex path documents this host-local exposure explicitly
-- The agent never invents MPNs: any new part must come with a datasheet-verifiable justification in BOM.md, flagged `UNVERIFIED` for human review
+- The agent never invents MPNs: any new part must come with a datasheet-verifiable justification in BOM.md, flagged `UNVERIFIED` for human review. A row may become `VERIFIED(datasheet)` only when every selection-driving parameter cites a passing cached datasheet artifact; this is evidence attachment, not engineer sign-off
 
 ## 8. Phase 3 — Integrations (post-hackathon roadmap; document, don't build)
 
 - **CI**: GitHub Action running `copperhead check` (ERC + DRC + drift) with a badge — hardware repos get a green check like software
 - **Simulation checkers**: ngspice (analog sanity), openEMS (EMC) as additional verify tools — architecture is checker-agnostic
 - **KiCad plugin**: chat panel inside KiCad via the IPC API — the full-Cursor endgame
-- **Part data**: live availability/pricing (Octopart/JLC), so "sourceable" becomes a checked constraint
+- **Part data**: opt-in JLC/LCSC availability and pricing through JLCSearch is implemented; Nexar remains an optional provider and future distributor providers remain roadmap extensions
 - **Format expansion**: Altium file support; the agent core is format-agnostic, only tools change
 - **Hosted**: private-repo SaaS, per-seat; payments via merchant-of-record (Dodo)
 
