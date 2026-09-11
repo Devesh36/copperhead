@@ -45,6 +45,7 @@
 - [x] 5.3 Offline sourceability validation in `check`: snapshot presence per MPN row, lifecycle not EOL, nonzero stock at retrieval, staleness vs `stalenessDays`; warnings by default, `--strict-sourcing` promotes to failures; EOL flagged per truth-precedence, never silently resolved
 - [x] 5.4 `VERIFIED(datasheet)` upgrade logic in BOM handling: upgrade only when every selection-driving parameter cites a passing citation; otherwise `UNVERIFIED` stands
 - [x] 5.5 Regression: AC-2.1 no-network assertion still passes with research configured (check makes zero network calls)
+- [x] 5.6 Add `audit <file>`: deterministic, model-free exact-MPN live lookup through the research egress boundary; read-only except transcript and explicit `--output`; sourceability snapshots remain untouched
 
 ## 6. Scenario tests (map 1:1 to delta specs)
 
@@ -55,10 +56,12 @@
 - [x] 6.5 part-research: injection attempt in cached text is inert and reported
 - [x] 6.6 safety-rails: provider key redaction; evidence upgrade to `VERIFIED(datasheet)`; no-evidence stays `UNVERIFIED`; static no-network-outside-egress guard
 - [x] 6.7 JLCSearch: no-key gate, public JSON fixture normalization, LCSC stock/price/datasheet mapping
+- [x] 6.8 Part audit: named Markdown input, exact-MPN/stock result classification, output containment, transcript logging, and no snapshot write
 
 ## 7. Docs and archive prep
 
 - [x] 7.1 Update `.env.example` with `BRAVE_API_KEY`, `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET`
 - [x] 7.2 Draft SPEC.md edits for archive time: §7 scoped network boundary replaces "no network tools", §4.2 tool table gains research tools, §8 marks part-data item pulled forward
 - [x] 7.3 README: document research setup, offline behavior (graceful degradation), and the `VERIFIED(datasheet)` flag meaning
+- [x] 7.5 README/SPEC: document `audit` as an explicit live-network, model-free command and keep `check` offline
 - [ ] 7.4 Coordinate with build-copperhead-phase-1: this change's safety-rails deltas modify requirements introduced there; archive phase-1 first (or sync its specs) so the MODIFIED blocks land against existing main specs

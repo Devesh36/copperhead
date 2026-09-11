@@ -180,6 +180,24 @@ program
   .option('--strict-sourcing', 'treat stale/zero-stock/missing sourcing evidence as failures')
   .action(checkAction);
 
+program
+  .command('audit <file>')
+  .description('live, model-free supplier availability audit (requires research.enabled)')
+  .option('--output <path>', 'write the Markdown report to this repo-relative path')
+  .action(async (file: string, opts: { output?: string }) => {
+    const repo = repoOf(program.opts());
+    try {
+      const { runPartAudit } = await import('./commands/audit.js');
+      const result = await runPartAudit({ repoRoot: repo, input: file, ...(opts.output ? { output: opts.output } : {}) });
+      if (program.opts().json) console.log(JSON.stringify(result, null, 2));
+      else console.log(result.report);
+      process.exit(result.ok ? 0 : 1);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
+
 // `draft` and `score` are command groups taking the artifact as a noun
 // (`draft schematic` today, `draft pcb` when layout drafting exists), so the
 // verb alone never has to guess what it applies to.

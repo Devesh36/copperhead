@@ -1,4 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,7 @@ import { recordPartSelection } from '../src/research/selection.js';
 import { saveConstraint } from '../src/memory/constraints.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { buildSystemPrompt } from '../src/agent/prompts.js';
+import { AuditError, parsePartAuditInput, runPartAudit } from '../src/commands/audit.js';
 
 const originalFetch = globalThis.fetch;
 const repos: string[] = [];
@@ -267,5 +269,53 @@ describe('offline sourceability checks', () => {
     const strict = await checkSourceability(repo, '.', { stalenessDays: 30 }, true);
     expect(loose.findings[0]?.severity).toBe('warning');
     expect(strict.findings[0]?.severity).toBe('error');
+  });
+});
+
+describe('live part audit command', () => {
+  it('parses a named MPN table and reports current supplier data without writing snapshots', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'part-audit-')); repos.push(repo);
+    await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+    await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({
+      research: { enabled: true, provider: 'jlcsearch', allowHosts: ['jlcsearch.tscircuit.com'] },
+    }));
+    await writeFile(path.join(repo, 'parts.md'), [
+      '# Prototype parts', '',
+      '| Refdes | MPN | Required qty |',
+      '|---|---|---:|',
+      '| R1 | TEST-1 | 10 |',
+    ].join('\n'));
+    globalThis.fetch = async () => new Response(JSON.stringify({ components: [{
+      mfr: 'TEST-1', stock: 25, price1: 0.12,
+      extra: { mpn: 'TEST-1', lifecycle: 'active', manufacturer: { name: 'Acme' }, datasheet: { pdf: 'https://wmsc.lcsc.com/test.pdf' } },
+    }] }), { status: 200 });
+
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md', output: 'audit-report.md' });
+
+    expect(result.ok).toBe(true);
+    expect(result.findings).toMatchObject([{ refdes: 'R1', mpn: 'TEST-1', requiredQuantity: 10, status: 'pass', part: { stockTotal: 25 } }]);
+    expect(await readFile(path.join(repo, 'audit-report.md'), 'utf8')).toContain('| R1 | TEST-1 | 10 | PASS | 25 | active |');
+    expect(await readFile(path.join(result.transcriptDir, 'transcript.jsonl'), 'utf8')).toContain('network-request');
+    expect(existsSync(path.join(repo, '.copperhead', 'constraints.json'))).toBe(false);
+  });
+
+  it('fails a supplier result that does not exactly match the requested MPN', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'part-audit-mpn-')); repos.push(repo);
+    await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+    await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({
+      research: { enabled: true, provider: 'jlcsearch', allowHosts: ['jlcsearch.tscircuit.com'] },
+    }));
+    await writeFile(path.join(repo, 'parts.md'), '| MPN |\n|---|\n| REQUESTED |\n');
+    globalThis.fetch = async () => new Response(JSON.stringify({ components: [{ mfr: 'NEAR-MATCH', stock: 25, extra: { mpn: 'NEAR-MATCH' } }] }), { status: 200 });
+
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings[0]).toMatchObject({ status: 'failure', issues: ['exact MPN was not returned by the selected provider'] });
+  });
+
+  it('requires a delimited MPN table and validates required quantities', () => {
+    expect(() => parsePartAuditInput('# parts\n\n- MPN: TEST-1\n')).toThrow(/MPN column/);
+    expect(() => parsePartAuditInput('| MPN | Required qty |\n|---|---:|\n| TEST-1 | 1.5 |\n')).toThrow(AuditError);
   });
 });

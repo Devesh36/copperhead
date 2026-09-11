@@ -288,6 +288,14 @@ copperhead skill run <name> [--scope power|all] [--model …]
     Run a skill (currently `generate-report`) via the nested sub-run. Needs a
     model, same as `do`. Does not snapshot or commit.
 
+copperhead audit <file> [--output report.md]
+    Read a repository-relative Markdown table with an `MPN` column and
+    optionally `Refdes` / `Required qty`; query the explicitly enabled part
+    provider without an LLM; report exact-MPN availability, stock, lifecycle,
+    price, and datasheet URL. The default is read-only except for its ignored
+    network transcript. `--output` writes the report inside the repository.
+    This command is live-network by design; `check` remains offline.
+
 copperhead check          (alias: copperhead verify)
     Run ERC + DRC + doc-drift check; exit non-zero on violations.
     No LLM calls. Usable as CI step / pre-commit hook.
@@ -488,6 +496,23 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-2.3** With a BOM.md value edited to disagree with the schematic (e.g. wrong resistor value): drift check fails and names the doc, the claim, and the actual value.
 - **AC-2.4** `--json` emits machine-readable results (parseable, stable keys).
 - **AC-2.5** Runs in < 60 s on the fixture.
+
+### AC-2a · `copperhead audit`
+
+- **AC-2a.1** Given `research.enabled: true` and a Markdown table containing
+  an `MPN` column, when `audit` runs, then it makes only allowlisted
+  egress requests through the research boundary, makes zero LLM calls, and
+  records the request log in a run transcript.
+- **AC-2a.2** Given a returned part whose MPN exactly matches the requested
+  MPN and whose stock satisfies `Required qty`, when `audit` runs, then
+  it reports stock, lifecycle, price, and datasheet availability without
+  changing BOM.md or constraints.json.
+- **AC-2a.3** Given a missing exact MPN, zero/insufficient stock, or EOL
+  lifecycle, when `audit` runs, then it exits non-zero and names the
+  failing row. Unknown lifecycle and absent datasheet URL are warnings.
+- **AC-2a.4** Given `--output <path>`, when `audit` runs, then it writes
+  the same Markdown report under the repository root; a path outside the root
+  is rejected.
 
 ### AC-3 · `copperhead do` — core loop
 
