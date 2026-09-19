@@ -56,11 +56,6 @@ export function researchToolGate(config: CopperheadConfig, env = process.env): b
   return researchPartToolGate(config, env);
 }
 
-export function researchEnabled(config: CopperheadConfig, env = process.env): boolean {
-  void env;
-  return researchConfig(config).enabled;
-}
-
 export function hostAllowed(hostname: string, allowHosts: string[]): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, '');
   return allowHosts.some((pattern) => {

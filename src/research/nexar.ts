@@ -12,26 +12,51 @@ interface NexarPart {
   datasheetUrl?: string;
 }
 
-function normalize(part: NexarPart): PartResult | null {
-  if (!part.mpn) return null;
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function normalize(value: unknown): PartResult | null {
+  const part = object(value) as NexarPart;
+  if (typeof part.mpn !== 'string' || !part.mpn.trim()) return null;
   const stockByDistributor: StockByDistributor[] = [];
   const priceBreaks: PriceBreak[] = [];
-  for (const seller of part.sellers ?? []) {
-    for (const offer of seller.offers ?? []) {
-      if (offer.inventoryLevel !== undefined) stockByDistributor.push({ distributor: offer.company?.name ?? 'unknown', quantity: Number(offer.inventoryLevel) || 0 });
-      for (const price of offer.prices ?? []) {
-        if (price.quantity !== undefined && price.price !== undefined) priceBreaks.push({ quantity: Number(price.quantity), unitPrice: Number(price.price), ...(price.currency ? { currency: price.currency } : {}) });
+  for (const sellerValue of Array.isArray(part.sellers) ? part.sellers : []) {
+    const seller = object(sellerValue);
+    for (const offerValue of Array.isArray(seller.offers) ? seller.offers : []) {
+      const offer = object(offerValue);
+      const inventory = offer.inventoryLevel;
+      if (inventory !== undefined) {
+        const company = object(offer.company);
+        stockByDistributor.push({
+          distributor: typeof company.name === 'string' ? company.name : 'unknown',
+          quantity: Number(inventory) || 0,
+        });
+      }
+      for (const priceValue of Array.isArray(offer.prices) ? offer.prices : []) {
+        const price = object(priceValue);
+        if (price.quantity !== undefined && price.price !== undefined) {
+          priceBreaks.push({
+            quantity: Number(price.quantity),
+            unitPrice: Number(price.price),
+            ...(typeof price.currency === 'string' ? { currency: price.currency } : {}),
+          });
+        }
       }
     }
   }
+  const manufacturer = object(part.manufacturer);
+  const datasheet = object(part.bestDatasheet);
   return {
     mpn: part.mpn,
-    manufacturer: part.manufacturer?.name ?? 'unknown',
-    lifecycle: part.lifecycleStatus ?? 'unknown',
+    manufacturer: typeof manufacturer.name === 'string' ? manufacturer.name : 'unknown',
+    lifecycle: typeof part.lifecycleStatus === 'string' ? part.lifecycleStatus : 'unknown',
     stockTotal: stockByDistributor.reduce((sum, s) => sum + s.quantity, 0),
     stockByDistributor,
     priceBreaks,
-    datasheetUrl: part.bestDatasheet?.url ?? part.datasheetUrl,
+    ...((typeof datasheet.url === 'string' ? datasheet.url : typeof part.datasheetUrl === 'string' ? part.datasheetUrl : undefined)
+      ? { datasheetUrl: typeof datasheet.url === 'string' ? datasheet.url : part.datasheetUrl! }
+      : {}),
     source: 'nexar',
   };
 }
@@ -50,10 +75,10 @@ export class NexarPartProvider implements PartDataProvider {
       client_secret: secret,
       scope: 'supply.domain',
     });
-    const data = (await requestJson(ctx, 'https://identity.nexar.com/connect/token', {
+    const data = object(await requestJson(ctx, 'https://identity.nexar.com/connect/token', {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body,
-    })) as { access_token?: string };
-    if (!data.access_token) throw new Error('Nexar token response did not contain access_token');
+    }));
+    if (typeof data.access_token !== 'string' || !data.access_token) throw new Error('Nexar token response did not contain access_token');
     this.token = data.access_token;
     return this.token;
   }
@@ -61,11 +86,21 @@ export class NexarPartProvider implements PartDataProvider {
   async search(ctx: RunContext, query: string, mpn?: string): Promise<PartResult[]> {
     const token = await this.accessToken(ctx);
     const gql = `query Search($q: String!) { supSearch(q: $q, limit: 20) { results { part { mpn manufacturer { name } lifecycleStatus bestDatasheet { url } sellers { offers { inventoryLevel prices { quantity price currency } company { name } } } } } } }`;
-    const data = (await requestJson(ctx, 'https://api.nexar.com/graphql', {
+    const data = object(await requestJson(ctx, 'https://api.nexar.com/graphql', {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify({ query: gql, variables: { q: mpn ?? query } }),
-    })) as { data?: { supSearch?: { results?: { part?: NexarPart }[] } }; errors?: { message?: string }[] };
-    if (data.errors?.length) throw new Error(data.errors.map((e) => e.message ?? 'Nexar error').join('; '));
-    return (data.data?.supSearch?.results ?? []).flatMap((r) => { const p = normalize(r.part ?? {}); return p ? [p] : []; });
+    }));
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    if (errors.length) throw new Error(errors.map((entry) => {
+      const message = object(entry).message;
+      return typeof message === 'string' ? message : 'Nexar error';
+    }).join('; '));
+    const payload = object(data.data);
+    const search = object(payload.supSearch);
+    const results = Array.isArray(search.results) ? search.results : [];
+    return results.flatMap((result) => {
+      const part = normalize(object(result).part);
+      return part ? [part] : [];
+    });
   }
 }

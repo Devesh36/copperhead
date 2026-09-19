@@ -75,12 +75,25 @@ export const HANDLERS: HandlerDef[] = [
     handler: async (ctx, args) => {
       const query = str(args, 'query');
       if (!query.trim()) return 'error: search_parts requires a non-empty query';
+      const refdes = typeof args.refdes === 'string' ? args.refdes.trim() : '';
+      if (refdes && !ctx.editsUnlocked) {
+        return { ok: false, text: 'error: selecting a part writes BOM.md and constraints.json; validate an OpenSpec change first, then retry search_parts with refdes' };
+      }
       const provider = researchConfig(ctx.config).provider === 'nexar' ? new NexarPartProvider() : new JlcSearchProvider();
       const results = await provider.search(ctx, query, typeof args.mpn === 'string' ? args.mpn : undefined);
-      if (typeof args.refdes === 'string' && args.refdes.trim() && results.length) {
-        const selected = typeof args.mpn === 'string' ? results.find((p) => p.mpn === args.mpn) ?? results[0]! : results[0]!;
-        await recordPartSelection(ctx, args.refdes.trim(), selected);
-        return { ok: true, text: `${JSON.stringify(results, null, 2)}\nselected ${selected.mpn} for ${args.refdes}` };
+      if (refdes) {
+        if (!results.length) {
+          return { ok: false, text: 'error: provider returned no matching parts; no BOM or constraint files were changed' };
+        }
+        const requestedMpn = typeof args.mpn === 'string' ? args.mpn.trim().toUpperCase() : undefined;
+        const selected = requestedMpn
+          ? results.find((part) => part.mpn.trim().toUpperCase() === requestedMpn)
+          : results[0];
+        if (!selected) {
+          return { ok: false, text: `error: provider did not return the requested exact MPN ${args.mpn}; no BOM or constraint files were changed` };
+        }
+        await recordPartSelection(ctx, refdes, selected);
+        return { ok: true, text: `${JSON.stringify(results, null, 2)}\nselected ${selected.mpn} for ${refdes}` };
       }
       return { ok: true, text: JSON.stringify(results, null, 2), };
     },
@@ -101,10 +114,20 @@ export const HANDLERS: HandlerDef[] = [
       const url = str(args, 'url');
       const mpn = str(args, 'mpn');
       if (!url || !mpn) return 'error: fetch_datasheet requires url and mpn';
+      const attachesEvidence = typeof args.refdes === 'string' || typeof args.section === 'string';
+      if (attachesEvidence && !(typeof args.refdes === 'string' && typeof args.section === 'string')) {
+        return { ok: false, text: 'error: refdes and section must be supplied together when attaching datasheet evidence' };
+      }
+      if (attachesEvidence && !ctx.editsUnlocked) {
+        return { ok: false, text: 'error: attaching datasheet evidence writes BOM.md and constraints.json; validate an OpenSpec change first, then retry' };
+      }
       const entry = await fetchDatasheet(ctx, url, mpn, typeof args.title === 'string' ? args.title : undefined);
       if (entry.status === 'cached' && typeof args.refdes === 'string' && typeof args.section === 'string') {
         await recordDatasheetEvidence(ctx, args.refdes, entry, args.section);
       }
+      ctx.filesTouched.add('.copperhead/datasheets/index.json');
+      if (entry.pdf) ctx.filesTouched.add(entry.pdf);
+      if (entry.text) ctx.filesTouched.add(entry.text);
       return { ok: entry.status === 'cached', text: JSON.stringify(entry, null, 2) };
     },
   },

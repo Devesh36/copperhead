@@ -302,9 +302,9 @@ export interface TableRow {
   /**
    * A typed BOM.md data row, per the fixed column contract that `init` writes
    * (Refdes | Value | Footprint | MPN | Rationale — see scaffold.ts's
-   * `bomTable`). `flags` currently only ever contains `UNVERIFIED` (the MPN
-   * column literally says so) or `MISSING_MPN` (no MPN column value at all);
-   * more may be added as the export/fab-gate work grows.
+   * `bomTable`). `flags` may contain `UNVERIFIED` (the MPN column starts with
+   * that marker), `MISSING_MPN` (no MPN column value), or
+   * `VERIFIED(datasheet)` when mechanically checkable evidence is attached.
    */
   export interface BomRow {
     refdes: string;
@@ -344,9 +344,9 @@ export interface TableRow {
         const footprint = row.cells[fpI];
         const mpn = row.cells[mpnI];
         const flags: string[] = [];
-        if (mpn === 'UNVERIFIED') flags.push('UNVERIFIED');
-        if (row.cells.some((c) => /VERIFIED\(datasheet\)/i.test(c))) flags.push('VERIFIED(datasheet)');
+        if (/^UNVERIFIED(?:\s*:|$)/i.test(mpn ?? '')) flags.push('UNVERIFIED');
         else if (!mpn) flags.push('MISSING_MPN');
+        if (row.cells.some((c) => /(?<![A-Z])VERIFIED\(datasheet\)/i.test(c))) flags.push('VERIFIED(datasheet)');
         out.push({
           refdes,
           value: value || undefined,

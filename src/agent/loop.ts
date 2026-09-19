@@ -404,6 +404,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
     }
     const runStats = stats(exitPath);
     await transcript.event('run-end', runStats);
+    const research = researchSummary(ctx);
     const summaryPath = await transcript.writeSummary({
       request: opts.request,
       changeId: ctx.changeId,
@@ -421,7 +422,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
       detail: restoreError ? `${reason}\n\nROLLBACK FAILED: ${restoreError} — the working tree may be in a partial state; inspect it with git status/git diff before rerunning` : reason,
       env: meta,
       stats: runStats,
-      ...(researchSummary(ctx) ? { research: researchSummary(ctx) } : {}),
+      ...(research ? { research } : {}),
     });
     log(`run failed: ${reason}`);
     if (restoreError) {
@@ -657,6 +658,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
         await transcript.event('run-refused', { summary });
         const runStats = stats('refused');
         await transcript.event('run-end', runStats);
+        const research = researchSummary(ctx);
         await transcript.writeSummary({
           request: opts.request,
           changeId: ctx.changeId,
@@ -672,9 +674,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
           detail: `REFUSED: ${summary}`,
           env: meta,
           stats: runStats,
-          ...(ctx.networkRequests !== undefined
-            ? { research: { requests: ctx.networkRequests, datasheetsCached: ctx.datasheetsCached ?? 0, snapshotsWritten: ctx.sourcingSnapshotsWritten ?? 0 } }
-            : {}),
+          ...(research ? { research } : {}),
         });
         log(`refused: ${summary}`);
         r.finish(outcomeLine(runStats));
@@ -708,6 +708,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
         await restore(repoRoot, snap);
         const runStats = stats('done');
         await transcript.event('run-end', runStats);
+        const research = researchSummary(ctx);
         await transcript.writeSummary({
           request: opts.request,
           changeId: ctx.changeId,
@@ -723,9 +724,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
           detail: 'dry run: changes reverted',
           env: meta,
           stats: runStats,
-          ...(ctx.networkRequests !== undefined
-            ? { research: { requests: ctx.networkRequests, datasheetsCached: ctx.datasheetsCached ?? 0, snapshotsWritten: ctx.sourcingSnapshotsWritten ?? 0 } }
-            : {}),
+          ...(research ? { research } : {}),
         });
         r.finish(outcomeLine(runStats, 'dry run: changes reverted'));
         return {
@@ -790,6 +789,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
       await transcript.event('run-committed', { commit, files });
       const runStats = stats('done');
       await transcript.event('run-end', runStats);
+      const research = researchSummary(ctx);
       await transcript.writeSummary({
         request: opts.request,
         changeId: ctx.changeId,
@@ -806,9 +806,7 @@ async function runWithProviders(opts: RunOptions, providers: Set<Provider>): Pro
         openObligations: null,
         env: meta,
         stats: runStats,
-        ...(ctx.networkRequests !== undefined
-          ? { research: { requests: ctx.networkRequests, datasheetsCached: ctx.datasheetsCached ?? 0, snapshotsWritten: ctx.sourcingSnapshotsWritten ?? 0 } }
-          : {}),
+        ...(research ? { research } : {}),
       });
       log(`committed ${commit.slice(0, 10)} (${files.length} file(s))`);
       r.finish(outcomeLine(runStats, `committed ${commit.slice(0, 10)}`));

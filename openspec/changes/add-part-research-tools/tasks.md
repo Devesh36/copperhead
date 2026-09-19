@@ -53,7 +53,7 @@
 - [x] 6.2 part-research: egress rejection, redirect re-validation, request logging
 - [x] 6.3 part-research: snapshot dual-write same-turn; fetch cache/index/text; oversized refusal; changed-hash revisit obligation
 - [x] 6.4 part-research: valid citation passes, broken citation fails; check offline; stale warns, strict fails
-- [x] 6.5 part-research: injection attempt in cached text is inert and reported
+- [ ] 6.5 part-research: live-agent scenario proving an injection attempt in cached text is inert and reported (prompt rule and structural gates implemented; live model acceptance not yet run)
 - [x] 6.6 safety-rails: provider key redaction; evidence upgrade to `VERIFIED(datasheet)`; no-evidence stays `UNVERIFIED`; static no-network-outside-egress guard
 - [x] 6.7 JLCSearch: no-key gate, public JSON fixture normalization, LCSC stock/price/datasheet mapping
 - [x] 6.8 Part audit: named Markdown input, exact-MPN/stock result classification, output containment, transcript logging, and no snapshot write

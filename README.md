@@ -153,6 +153,15 @@ and citations offline; `--strict-sourcing` turns stale, missing, or zero-stock
 warnings into failures. A `VERIFIED(datasheet)` BOM marker means only that the
 evidence is attached and mechanically checkable—it is not engineering sign-off.
 
+In the full `do` / `create` workflow, supplier search is a read-only planning
+step. Once the run has a validated OpenSpec change, selecting a result records
+the exact MPN as `UNVERIFIED: <mpn>` in BOM.md and writes the matching sourcing
+snapshot to constraints.json, opening the normal drift and affected-artifact
+obligations. `fetch_datasheet` then caches reproducible evidence; attaching a
+cited section promotes the BOM row to `VERIFIED(datasheet)`. ERC/DRC and the
+obligations ledger still gate the run, while later `check` invocations validate
+the saved sourcing and citation evidence entirely offline.
+
 ### Live parts audit
 
 `copperhead audit <file>` is the deterministic, live companion to the

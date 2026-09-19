@@ -67,16 +67,13 @@ function normalize(component: unknown): PartResult | null {
   };
 }
 
-interface JlcSearchResponse {
-  components?: unknown[];
-}
-
 export class JlcSearchProvider implements PartDataProvider {
   async search(ctx: RunContext, query: string, mpn?: string): Promise<PartResult[]> {
     const target = (mpn ?? query).trim();
     const url = `${JLCSEARCH_URL}?q=${encodeURIComponent(target)}&limit=20&full=true`;
-    const data = await requestJson(ctx, url, { headers: { accept: 'application/json' } }) as JlcSearchResponse;
-    return (data.components ?? []).flatMap((component) => {
+    const data = record(await requestJson(ctx, url, { headers: { accept: 'application/json' } }));
+    const components = Array.isArray(data.components) ? data.components : [];
+    return components.flatMap((component) => {
       const part = normalize(component);
       return part ? [part] : [];
     });

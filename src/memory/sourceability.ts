@@ -25,11 +25,17 @@ function stale(retrieved: string, days: number): boolean {
 
 async function citationFindings(repoRoot: string, constraints: ConstraintRegistry): Promise<SourceabilityFinding[]> {
   const indexPath = path.join(repoRoot, '.copperhead', 'datasheets', 'index.json');
-  const entries: { pdf?: string; text?: string; status?: string }[] = existsSync(indexPath)
-    ? ((JSON.parse(await readFile(indexPath, 'utf8')) as { entries?: unknown[] }).entries ?? []).filter(
+  let entries: { pdf?: string; text?: string; status?: string }[] = [];
+  if (existsSync(indexPath)) {
+    try {
+      const parsed = JSON.parse(await readFile(indexPath, 'utf8')) as { entries?: unknown[] };
+      entries = (Array.isArray(parsed.entries) ? parsed.entries : []).filter(
         (entry): entry is { pdf?: string; text?: string; status?: string } => !!entry && typeof entry === 'object',
-      )
-    : [];
+      );
+    } catch {
+      entries = [];
+    }
+  }
   const byPdf = new Map(entries.filter((e) => e.pdf).map((e) => [e.pdf!, e]));
   const out: SourceabilityFinding[] = [];
   for (const [key, constraint] of Object.entries(constraints)) {
@@ -67,7 +73,7 @@ export async function checkSourceability(repoRoot: string, docsDir: string, conf
   const constraints = await loadConstraints(repoRoot);
   const bomPath = path.join(repoRoot, docsDir, 'BOM.md');
   if (!existsSync(bomPath)) return { findings: await citationFindings(repoRoot, constraints), snapshots: 0 };
-  const rows = parseBomTable(await readFile(bomPath, 'utf8')).filter((row) => row.mpn && row.mpn !== 'UNVERIFIED');
+  const rows = parseBomTable(await readFile(bomPath, 'utf8')).filter((row) => row.mpn && !row.flags.includes('UNVERIFIED'));
   let snapshots = 0;
   const days = config?.stalenessDays ?? 30;
   for (const row of rows) {

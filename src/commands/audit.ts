@@ -135,7 +135,7 @@ function findingLabel(finding: PartAuditFinding): string {
 }
 
 export function formatPartAudit(result: Omit<PartAuditResult, 'report' | 'output'>): string {
-  const available = result.findings.filter((finding) => finding.status !== 'failure');
+  const available = result.findings.filter((finding) => finding.status === 'pass');
   const unavailable = result.findings.filter((finding) => finding.status === 'failure');
   const review = result.findings.filter((finding) => finding.status === 'warning');
   const lines = [

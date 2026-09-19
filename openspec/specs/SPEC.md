@@ -296,9 +296,12 @@ copperhead audit <file> [--output report.md]
     network transcript. `--output` writes the report inside the repository.
     This command is live-network by design; `check` remains offline.
 
-copperhead check          (alias: copperhead verify)
-    Run ERC + DRC + doc-drift check; exit non-zero on violations.
-    No LLM calls. Usable as CI step / pre-commit hook.
+copperhead check [--strict-sourcing]   (alias: copperhead verify)
+    Run ERC + DRC + doc-drift + offline sourceability checks; exit non-zero
+    on violations. Stale, missing, and zero-stock sourcing evidence warns by
+    default; --strict-sourcing promotes those findings to failures. No LLM or
+    network calls. Usable as CI step / pre-commit hook. JSON output includes a
+    `sourceability` key whenever research is enabled or sourcing snapshots exist.
 
 copperhead sync [--dry-run]
     Verify the entire design state for inconsistencies — doc tables vs
@@ -499,8 +502,10 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-2.1** On a clean fixture: exit 0, prints ERC ✓ DRC ✓ drift ✓, makes zero LLM calls (assert: no network to api.* hosts).
 - **AC-2.2** With a deliberately broken schematic (unconnected pin): exit non-zero, violation printed with sheet/location.
 - **AC-2.3** With a BOM.md value edited to disagree with the schematic (e.g. wrong resistor value): drift check fails and names the doc, the claim, and the actual value.
-- **AC-2.4** `--json` emits machine-readable results (parseable, stable keys).
+- **AC-2.4** `--json` emits machine-readable results (parseable, stable keys), including `sourceability` whenever research is enabled or any `sourcing.*` snapshot exists.
 - **AC-2.5** Runs in < 60 s on the fixture.
+- **AC-2.6** Given sourcing snapshots, `check` validates them and cached datasheet citations without reading provider credentials or making any network call.
+- **AC-2.7** A stale, missing, or zero-stock sourcing snapshot warns without failing by default and fails under `--strict-sourcing`; EOL/obsolete lifecycle and broken citations fail in both modes.
 
 ### AC-2a · `copperhead audit`
 

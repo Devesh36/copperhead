@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { hostAllowed, researchToolGate } from '../src/research/config.js';
-import { EgressError, request } from '../src/research/net.js';
+import { EgressError, EgressSizeError, request } from '../src/research/net.js';
 import { extractPdfText, fetchDatasheet } from '../src/research/cache.js';
 import { checkSourceability } from '../src/memory/sourceability.js';
 import { DEFAULTS, type CopperheadConfig } from '../src/config.js';
@@ -18,6 +18,8 @@ import { saveConstraint } from '../src/memory/constraints.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { buildSystemPrompt } from '../src/agent/prompts.js';
 import { AuditError, parsePartAuditInput, runPartAudit } from '../src/commands/audit.js';
+import { HANDLERS } from '../src/capabilities/handlers.js';
+import { parseBomTable } from '../src/memory/bom-table.js';
 
 const originalFetch = globalThis.fetch;
 const repos: string[] = [];
@@ -42,7 +44,7 @@ function ctx(repoRoot: string, events: unknown[] = [], cfg = config()): RunConte
     repoRoot,
     config: cfg,
     transcript: { event: async (_type: string, data: unknown) => events.push(data) } as unknown as RunContext['transcript'],
-    ledger: { add: () => {}, clear: () => false } as unknown as RunContext['ledger'],
+    ledger: new ObligationsLedger(),
     runId: 'test',
     interactive: false,
     confirm: async () => true,
@@ -106,6 +108,38 @@ describe('research safety boundary', () => {
     expect(events).toHaveLength(2);
   });
 
+  it('requires HTTPS and strips credentials on an allowed cross-origin redirect', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-redirect-secrets-')); repos.push(repo);
+    const run = ctx(repo, [], config({ research: { enabled: true, allowHosts: ['first.test', 'second.test'] } }));
+    const seen: Array<{ url: string; authorization: string | null; cookie: string | null }> = [];
+    globalThis.fetch = async (input, init) => {
+      const headers = new Headers(init?.headers);
+      seen.push({ url: String(input), authorization: headers.get('authorization'), cookie: headers.get('cookie') });
+      if (seen.length === 1) return new Response(null, { status: 302, headers: { location: 'https://second.test/final' } });
+      return new Response('ok', { status: 200 });
+    };
+    await request(run, 'https://first.test/start', { headers: { authorization: 'Bearer secret', cookie: 'session=secret' } });
+    expect(seen).toEqual([
+      { url: 'https://first.test/start', authorization: 'Bearer secret', cookie: 'session=secret' },
+      { url: 'https://second.test/final', authorization: null, cookie: null },
+    ]);
+    await expect(request(run, 'http://first.test/plaintext')).rejects.toThrow(/must use https/);
+  });
+
+  it('turns every non-2xx response into a status-bearing EgressError', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-http-error-')); repos.push(repo);
+    globalThis.fetch = async () => new Response('{"error":"down"}', { status: 503 });
+    const error = await request(ctx(repo), 'https://allowed.test/data').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(EgressError);
+    expect(error).toMatchObject({ status: 503 });
+  });
+
+  it('rejects an oversized declared body before consuming it', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-content-length-')); repos.push(repo);
+    globalThis.fetch = async () => new Response('small fixture', { status: 200, headers: { 'content-length': '9999' } });
+    await expect(request(ctx(repo), 'https://allowed.test/data', {}, { maxBytes: 10 })).rejects.toBeInstanceOf(EgressSizeError);
+  });
+
   it('caches a PDF, index, and page-marked text without needing a PDF package', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'research-cache-')); repos.push(repo);
     const bytes = new TextEncoder().encode('1 0 obj /Type /Page endobj BT (Supply voltage) Tj ET');
@@ -120,17 +154,45 @@ describe('research safety boundary', () => {
 
   it('records an oversized response as not-cached while preserving the URL', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'research-oversize-')); repos.push(repo);
-    globalThis.fetch = async () => new Response(new Uint8Array([1, 2]), { status: 200 });
+    globalThis.fetch = async () => new Response(new Uint8Array(12), { status: 200 });
     const entry = await fetchDatasheet(ctx(repo, [], config({ research: { enabled: true, allowHosts: ['allowed.test'], maxPdfMB: 0.000001 } })), 'https://allowed.test/large.pdf', 'TEST-LARGE');
     expect(entry.status).toBe('not-cached');
     expect(entry.url).toBe('https://allowed.test/large.pdf');
+  });
+
+  it('uses a fresh datasheet cache entry without another network request', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-cache-hit-')); repos.push(repo);
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response(new TextEncoder().encode('1 /Type /Page BT (cached) Tj ET'), { status: 200 });
+    };
+    const run = ctx(repo);
+    const first = await fetchDatasheet(run, 'https://allowed.test/cached.pdf', 'CACHE-1');
+    const second = await fetchDatasheet(run, 'https://allowed.test/cached.pdf', 'CACHE-1');
+    expect(second).toEqual(first);
+    expect(calls).toBe(1);
+  });
+
+  it('recovers a corrupt index and preserves concurrent cache entries', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-corrupt-index-')); repos.push(repo);
+    await mkdir(path.join(repo, '.copperhead', 'datasheets'), { recursive: true });
+    await writeFile(path.join(repo, '.copperhead', 'datasheets', 'index.json'), '{broken');
+    await expect(checkSourceability(repo, '.', undefined, false)).resolves.toBeDefined();
+    globalThis.fetch = async (input) => new Response(new TextEncoder().encode(`1 /Type /Page BT (${String(input)}) Tj ET`), { status: 200 });
+    await Promise.all([
+      fetchDatasheet(ctx(repo), 'https://allowed.test/a.pdf', 'A-1'),
+      fetchDatasheet(ctx(repo), 'https://allowed.test/b.pdf', 'B-1'),
+    ]);
+    const index = JSON.parse(await readFile(path.join(repo, '.copperhead', 'datasheets', 'index.json'), 'utf8')) as { entries: unknown[] };
+    expect(index.entries).toHaveLength(2);
   });
 
   it('opens a revisit obligation when a cited URL changes hash', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'research-revisit-')); repos.push(repo);
     let version = 0;
     globalThis.fetch = async () => new Response(new Uint8Array([version++ + 1]), { status: 200 });
-    const run = ctx(repo);
+    const run = ctx(repo, [], config({ research: { enabled: true, allowHosts: ['allowed.test'], stalenessDays: -1 } }));
     run.ledger = new ObligationsLedger();
     const first = await fetchDatasheet(run, 'https://allowed.test/change.pdf', 'TEST-CHANGE');
     await saveConstraint(repo, 'sourcing.U1', { source: `${first.pdf} §1`, affects: ['U1'], mpn: 'TEST-CHANGE' });
@@ -141,6 +203,11 @@ describe('research safety boundary', () => {
   it('extracts common PDF text operators into page markers', () => {
     const bytes = new TextEncoder().encode('1 /Type /Page BT (hello) Tj [(world)] TJ');
     expect(extractPdfText(bytes)).toContain('## Page 1\nhello world');
+  });
+
+  it('handles long escaped non-matching PDF strings without backtracking', () => {
+    const bytes = new TextEncoder().encode(`1 /Type /Page BT (${'\\a'.repeat(5_000)}`);
+    expect(extractPdfText(bytes)).toContain('## Page 1');
   });
 
   it('normalizes Brave and Nexar fixture responses through the egress boundary', async () => {
@@ -206,6 +273,78 @@ describe('research safety boundary', () => {
     expect(events).toHaveLength(1);
   });
 
+  it('treats malformed provider payload shapes as empty results', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-malformed-provider-')); repos.push(repo);
+    const run = ctx(repo, [], config({ research: { enabled: true, allowHosts: ['jlcsearch.tscircuit.com'] } }));
+    globalThis.fetch = async () => new Response('null', { status: 200 });
+    await expect(new JlcSearchProvider().search(run, 'TEST')).resolves.toEqual([]);
+    globalThis.fetch = async () => new Response('{"components":{"0":{}}}', { status: 200 });
+    await expect(new JlcSearchProvider().search(run, 'TEST')).resolves.toEqual([]);
+  });
+
+  it('guards malformed Nexar result arrays and seller collections', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-malformed-nexar-')); repos.push(repo);
+    const saved = { NEXAR_CLIENT_ID: process.env.NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET: process.env.NEXAR_CLIENT_SECRET };
+    process.env.NEXAR_CLIENT_ID = 'id';
+    process.env.NEXAR_CLIENT_SECRET = 'secret';
+    const run = ctx(repo, [], config({ research: { enabled: true, provider: 'nexar', allowHosts: ['identity.nexar.com', 'api.nexar.com'] } }));
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response(calls === 1 ? '{"access_token":"token"}' : '{"data":{"supSearch":{"results":{"0":{}}}}}', { status: 200 });
+    };
+    try {
+      await expect(new NexarPartProvider().search(run, 'TEST')).resolves.toEqual([]);
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it('keeps read-only part search available but gates selection writes and requires exact MPNs', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-handler-gate-')); repos.push(repo);
+    await writeFile(path.join(repo, 'BOM.md'), '| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| U1 | MCU | QFN | UNVERIFIED | choose |\n');
+    const run = ctx(repo, [], config({ docs: '.', research: { enabled: true, provider: 'jlcsearch', allowHosts: ['jlcsearch.tscircuit.com'] } }));
+    const handler = HANDLERS.find((entry) => entry.schema.name === 'search_parts')!;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response('{"components":[{"mfr":"NEAR-MATCH","stock":10,"extra":{"mpn":"NEAR-MATCH"}}]}', { status: 200 });
+    };
+    await expect(handler.handler(run, { query: 'MCU', mpn: 'REQUESTED', refdes: 'U1' })).resolves.toMatchObject({ ok: false });
+    expect(calls).toBe(0);
+    expect(existsSync(path.join(repo, '.copperhead', 'constraints.json'))).toBe(false);
+
+    run.editsUnlocked = true;
+    await expect(handler.handler(run, { query: 'MCU', mpn: 'REQUESTED', refdes: 'U1' })).resolves.toMatchObject({ ok: false });
+    expect(existsSync(path.join(repo, '.copperhead', 'constraints.json'))).toBe(false);
+
+    globalThis.fetch = async () => new Response('{"components":[]}', { status: 200 });
+    await expect(handler.handler(run, { query: 'MCU', mpn: 'REQUESTED', refdes: 'U1' })).resolves.toMatchObject({ ok: false });
+    expect(existsSync(path.join(repo, '.copperhead', 'constraints.json'))).toBe(false);
+
+    globalThis.fetch = async () => new Response('{"components":[{"mfr":"REQUESTED","stock":10,"extra":{"mpn":"requested"}}]}', { status: 200 });
+    await expect(handler.handler(run, { query: 'MCU', mpn: ' REQUESTED ', refdes: 'U1' })).resolves.toMatchObject({ ok: true });
+    expect(await readFile(path.join(repo, 'BOM.md'), 'utf8')).toContain('UNVERIFIED: requested');
+  });
+
+  it('gates only the evidence-writing fetch branch before edit unlock', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-fetch-gate-')); repos.push(repo);
+    const run = ctx(repo);
+    const handler = HANDLERS.find((entry) => entry.schema.name === 'fetch_datasheet')!;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response(new TextEncoder().encode('1 /Type /Page BT (limits) Tj ET'), { status: 200 });
+    };
+    await expect(handler.handler(run, { url: 'https://allowed.test/a.pdf', mpn: 'A-1', refdes: 'U1', section: 'limits' })).resolves.toMatchObject({ ok: false });
+    expect(calls).toBe(0);
+    await expect(handler.handler(run, { url: 'https://allowed.test/a.pdf', mpn: 'A-1' })).resolves.toMatchObject({ ok: true });
+    expect(calls).toBe(1);
+  });
+
   it('dual-writes a selected part to BOM.md and constraints.json', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'research-selection-')); repos.push(repo);
     await writeFile(path.join(repo, 'BOM.md'), '# BOM\n\n| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| U1 | MCU | QFN | UNVERIFIED | choose a sourceable MCU |\n');
@@ -215,8 +354,29 @@ describe('research safety boundary', () => {
       stockByDistributor: [{ distributor: 'Distro', quantity: 12 }],
       priceBreaks: [{ quantity: 1000, unitPrice: 0.12, currency: 'USD' }],
     });
-    expect(await readFile(path.join(repo, 'BOM.md'), 'utf8')).toContain('| U1 | MCU | QFN | TEST-1 |');
+    expect(await readFile(path.join(repo, 'BOM.md'), 'utf8')).toContain('| U1 | MCU | QFN | UNVERIFIED: TEST-1 |');
     expect(JSON.parse(await readFile(path.join(repo, '.copperhead', 'constraints.json'), 'utf8'))['sourcing.U1']).toMatchObject({ mpn: 'TEST-1', stockTotal: 12, price1k: 0.12 });
+    expect(run.ledger.openObligations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'drift' }),
+      expect.objectContaining({ kind: 'affects-revisit', detail: 'sourcing.U1 affects U1' }),
+    ]));
+    expect(run.ledger.openObligations.some((item) => item.kind === 'constraint-dual-write')).toBe(false);
+  });
+
+  it('updates reordered BOM columns by header name and keeps the part unverified', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'research-selection-columns-')); repos.push(repo);
+    await writeFile(path.join(repo, 'BOM.md'), '# BOM\n\n| Refdes | MPN | Value | Footprint | Rationale |\n|---|---|---|---|---|\n| U1 | UNVERIFIED | MCU | QFN | choose |\n');
+    const run = ctx(repo, [], config({ docs: '.' }));
+    await recordPartSelection(run, 'U1', { mpn: 'TEST-1', manufacturer: 'Acme', lifecycle: 'active', stockTotal: 12, stockByDistributor: [], priceBreaks: [] });
+    const markdown = await readFile(path.join(repo, 'BOM.md'), 'utf8');
+    expect(markdown).toContain('| U1 | UNVERIFIED: TEST-1 | MCU | QFN |');
+    expect(parseBomTable(markdown)[0]).toMatchObject({ mpn: 'UNVERIFIED: TEST-1', flags: ['UNVERIFIED'] });
+  });
+
+  it('does not mistake UNVERIFIED(datasheet) for verified evidence or suppress MISSING_MPN', () => {
+    const rows = parseBomTable('| Refdes | Value | Footprint | MPN | Rationale |\n|---|---|---|---|---|\n| U1 | MCU | QFN |  | stale VERIFIED(datasheet) |\n| U2 | MCU | QFN | UNVERIFIED(datasheet) | none |\n');
+    expect(rows[0]?.flags).toEqual(['MISSING_MPN', 'VERIFIED(datasheet)']);
+    expect(rows[1]?.flags).not.toContain('VERIFIED(datasheet)');
   });
 
   it('promotes a selected BOM row only after the cited extracted section exists', async () => {
@@ -312,6 +472,35 @@ describe('live part audit command', () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings[0]).toMatchObject({ status: 'failure', issues: ['exact MPN was not returned by the selected provider'] });
+  });
+
+  it('surfaces provider outages instead of reporting parts unavailable', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'part-audit-outage-')); repos.push(repo);
+    await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+    await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({
+      research: { enabled: true, provider: 'jlcsearch', allowHosts: ['jlcsearch.tscircuit.com'] },
+    }));
+    await writeFile(path.join(repo, 'parts.md'), '| MPN |\n|---|\n| TEST-1 |\n');
+    globalThis.fetch = async () => new Response('{"error":"down"}', { status: 503 });
+    const error = await runPartAudit({ repoRoot: repo, input: 'parts.md' }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(EgressError);
+    expect(error).toMatchObject({ status: 503 });
+  });
+
+  it('prints warning rows only under Needs review, not Available now', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'part-audit-warning-')); repos.push(repo);
+    await mkdir(path.join(repo, '.copperhead'), { recursive: true });
+    await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({
+      research: { enabled: true, provider: 'jlcsearch', allowHosts: ['jlcsearch.tscircuit.com'] },
+    }));
+    await writeFile(path.join(repo, 'parts.md'), '| MPN |\n|---|\n| TEST-1 |\n');
+    globalThis.fetch = async () => new Response('{"components":[{"mfr":"TEST-1","stock":25,"extra":{"mpn":"TEST-1"}}]}', { status: 200 });
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
+    expect(result.findings[0]?.status).toBe('warning');
+    const available = result.report.split('## Not available')[0]!;
+    const review = result.report.split('## Needs review')[1]!.split('## Detail')[0]!;
+    expect(available).not.toContain('TEST-1');
+    expect(review).toContain('TEST-1');
   });
 
   it('requires a delimited MPN table and validates required quantities', () => {
