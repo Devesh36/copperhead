@@ -164,29 +164,62 @@ the saved sourcing and citation evidence entirely offline.
 
 ### Live parts availability check
 
-`copperhead parts check <file>` is the deterministic, live companion to the
-offline `check` command. It needs `research.enabled: true`, but no model or
-JLCSearch credential. The input is a repository-relative Markdown table with
-an `MPN` column and optional `Refdes` and `Required qty` columns:
+`copperhead parts check <file>` searches live supplier data for parts mentioned
+in a repository-relative Markdown file. Enable `research.enabled: true` first;
+the default JLCSearch provider needs no API key or model.
+
+Use a table, a list, or a short description. For example:
 
 ```md
-| Refdes | MPN | Required qty |
-|---|---|---:|
-| R1 | 0603WAF1001T5E | 100 |
+# Prototype parts
+
+- MPN: 0603WAF1001T5E qty: 10
+- 10k resistor 0603
+- ESP32 module
+- LCSC: C21190
+
+Use NE555P for the timer.
 ```
+
+Tables can use `MPN`, `Part number`, `LCSC`, `Part`, `Name`, `Component`,
+`Description`, or `Value` columns, with optional `Refdes`, `Qty` / `Required qty`,
+and `Package` columns. Explicit MPN/part-number/LCSC fields require an exact match.
 
 ```bash
-copperhead parts check docs/prototype-parts.md
-copperhead parts check docs/prototype-parts.md --output docs/prototype-parts.check.md
+copperhead parts check examples/parts-check.md
+copperhead parts check demo.md
+copperhead parts check demo.md --output parts-report.md
 ```
 
-It queries the configured supplier, requires an exact returned MPN, and prints
-a compact terminal summary with stock, price, and only the groups that contain
-parts. `--output` saves a detailed Markdown report. Zero/insufficient stock,
-EOL lifecycle, or a missing exact MPN makes the command fail. Unknown lifecycle
-or a missing datasheet URL is a warning. It never changes `BOM.md` or
-`constraints.json`; `--output` is the only non-transcript write. Every network
-request is allowlisted and recorded in the ignored run transcript.
+The terminal shows the searched text and its source line, with four result groups:
+
+- **Available:** an exact match has enough stock. Missing lifecycle or datasheet
+  information adds a review note without removing the part from this count.
+- **Choose a part:** up to three distinct candidates for a name or description,
+  with MPN, package, stock, unit price, description, and supplier link when supplied.
+  These are suggestions; check specifications, then put the chosen MPN or LCSC
+  number in the file and run again. Compatible substitutes are not inferred.
+- **Not available:** an exact match is out of stock, below the requested quantity,
+  or marked EOL/obsolete.
+- **Not found:** no matching result was returned; this does not establish that a
+  part is out of stock everywhere.
+
+Name extraction uses deterministic rules, so arbitrary prose may need editing
+into short part lines. Code blocks, comments, and explicitly excluded sections
+are skipped. Repeated mentions are deduplicated; distinct references retain their
+own quantities. A run accepts up to 50 extracted queries and reuses identical
+lookups. Search suggestions are ordered with sufficient-stock, non-EOL results
+first, preserving supplier order within each group. Stock and pricing are snapshots;
+unknown currency is labelled explicitly.
+
+`--output` saves a Markdown report; `--json` includes queries, source lines, match
+kind, and candidate details. Exit 0 means the lookups completed without missing
+matches or unavailable exact parts; candidate choices and metadata warnings can
+still require review. Provider errors, no matches, and unavailable exact parts
+exit non-zero. The command never changes `BOM.md` or `constraints.json`; the only
+writes are its ignored transcript and an explicitly requested report. Every
+network request goes through the allowlisted research boundary. `copperhead check`
+remains offline.
 
 `--model` accepts `gpt-5` (OpenAI), `claude` / `claude-<id>` (Anthropic API), `claude-code` / `claude-code:<id>` (Claude Code, saved login), `cursor` / `cursor:<id>` (Cursor Agent CLI, saved login), and `codex` / `codex:<id>` (Codex CLI, saved login). Routing is by prefix; `claude-code` is matched before the `claude` prefix. `compat:<id>` targets any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini, or a local Ollama) via `COPPERHEAD_BASE_URL` and `COPPERHEAD_API_KEY_ENV` - worked examples for each in [`.env.example`](.env.example) and the [configuration reference](https://docs.copperhead.sh/reference/configuration/#model-selection).
 

@@ -289,13 +289,21 @@ copperhead skill run <name> [--scope power|all] [--model …]
     model, same as `do`. Does not snapshot or commit.
 
 copperhead parts check <file> [--output report.md]
-    Read a repository-relative Markdown table with an `MPN` column and
-    optionally `Refdes` / `Required qty`; query the explicitly enabled part
-    provider without an LLM; print a compact terminal summary of exact-MPN
-    availability, stock, price, and any missing evidence. The default is
-    read-only except for its ignored network transcript. `--output` writes a
-    detailed Markdown report inside the repository.
-    This command is live-network by design; `check` remains offline.
+    Extract part names and identifiers from repository-relative Markdown tables,
+    lists, and prose; query the enabled supplier without an LLM. Explicit MPN,
+    part-number, and LCSC fields require exact matches. Broad names show up to
+    three distinct candidates for human selection, never confirmed availability.
+    Terminal output includes source lines, match kind, stock, quantity-aware unit
+    price, package, description, and supplier links when supplied. Availability,
+    candidates to choose, unavailable exact parts, and missing matches have
+    separate counts; missing metadata is a review annotation on stocked parts.
+    Extraction is heuristic, skips code/comments/excluded sections, deduplicates
+    mentions, rejects more than 50 queries, and caches identical lookups per run.
+    Missing matches, unavailable exact parts, and provider errors exit non-zero;
+    successful candidate searches and metadata warnings exit zero with review notes.
+    Read-only except the ignored transcript and an explicit repo-contained
+    --output Markdown report. --json retains all candidate and match details.
+    This command is live-network by design; check remains offline.
 
 copperhead check [--strict-sourcing]   (alias: copperhead verify)
     Run ERC + DRC + doc-drift + offline sourceability checks; exit non-zero
@@ -524,9 +532,14 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-2a.4** Given `--output <path>`, when `parts check` runs, then it writes
   a detailed Markdown report under the repository root; a path outside the
   root is rejected. The terminal summary names the saved report.
-- **AC-2a.5** Terminal output shows counts and only nonempty result groups,
-  with stock, required quantity, price, and reasons per part. A warning does
-  not appear as an unqualified PASS. `--json` retains the structured result.
+- **AC-2a.5** Terminal output counts exact-MPN parts with sufficient stock and
+  non-EOL lifecycle as available, even when missing metadata flags them for
+  review. Review is an additional count on available parts, with reasons shown
+  in the available row. Only nonempty availability groups are printed. A
+  warning does not appear as an unqualified PASS. `--json` retains the
+  structured result.
+- **AC-2a.6** Lists, named tables, and prose part mentions produce queries with source lines. Explicit identifiers require exact matches; names produce up to three distinct suggestions. Suggestions are not counted as available selections, and an empty result is labelled not-found rather than out-of-stock.
+- **AC-2a.7** Repeated queries use one supplier lookup per run; each reference keeps its own quantity. Extraction refuses over 50 queries before network access and ignores code/comments/excluded sections. Reports expose heuristic queries for review.
 
 ### AC-3 · `copperhead do` — core loop
 

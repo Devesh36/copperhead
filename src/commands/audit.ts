@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
-import { parseNamedMarkdownTables } from '../memory/bom-table.js';
+import { AuditError, parsePartAuditInput, type AuditInputRow } from '../research/markdown-parts.js';
 import { resolveInRepo } from '../util/paths.js';
 import { researchConfig, researchPartToolGate } from '../research/config.js';
 import { JlcSearchProvider } from '../research/jlcsearch.js';
@@ -11,23 +11,22 @@ import { Transcript } from '../agent/transcript.js';
 import { ObligationsLedger } from '../agent/ledger.js';
 import type { RunContext } from '../agent/context.js';
 
-export class AuditError extends Error {}
-
-export interface AuditInputRow {
-  refdes?: string;
-  mpn: string;
-  requiredQuantity?: number;
-}
+export { AuditError, parsePartAuditInput, type AuditInputRow } from '../research/markdown-parts.js';
 
 export type AuditStatus = 'pass' | 'warning' | 'failure';
 
-export interface PartAuditFinding {
-  refdes?: string;
-  mpn: string;
-  requiredQuantity?: number;
+export interface PartCandidate {
+  part: PartResult;
+  status: AuditStatus;
+  issues: string[];
+}
+
+export interface PartAuditFinding extends AuditInputRow {
+  match: 'exact' | 'candidates' | 'none';
   status: AuditStatus;
   issues: string[];
   part?: PartResult;
+  candidates?: PartCandidate[];
 }
 
 export interface PartAuditResult {
@@ -46,126 +45,129 @@ export interface PartAuditOptions {
   output?: string;
 }
 
-function normalizedHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
-}
-
-function column(header: string[], names: string[]): number {
-  return header.findIndex((cell) => names.includes(normalizedHeader(cell)));
-}
-
-function parseQuantity(value: string | undefined, row: number): number | undefined {
-  if (!value?.trim()) return undefined;
-  const parsed = Number(value.replace(/,/g, '').trim());
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new AuditError(`row ${row}: Required qty must be a positive whole number, got "${value}"`);
-  }
-  return parsed;
-}
-
-/** Parse GFM tables containing an exact `MPN` column and optional identifiers. */
-export function parsePartAuditInput(markdown: string): AuditInputRow[] {
-  const out: AuditInputRow[] = [];
-  for (const table of parseNamedMarkdownTables(markdown)) {
-    const headers = table.header.cells;
-    const mpnColumn = column(headers, ['mpn', 'manufacturer part number', 'manufacturer part no']);
-    if (mpnColumn < 0) continue;
-    const refdesColumn = column(headers, ['refdes', 'reference', 'designator']);
-    const quantityColumn = column(headers, ['required qty', 'required quantity', 'qty', 'quantity']);
-    for (const [index, row] of table.rows.entries()) {
-      const mpn = row.cells[mpnColumn]?.trim();
-      if (!mpn) throw new AuditError(`row ${index + 1}: MPN is required`);
-      const refdes = refdesColumn < 0 ? undefined : row.cells[refdesColumn]?.trim() || undefined;
-      const requiredQuantity = quantityColumn < 0 ? undefined : parseQuantity(row.cells[quantityColumn], index + 1);
-      out.push({ mpn, ...(refdes ? { refdes } : {}), ...(requiredQuantity ? { requiredQuantity } : {}) });
-    }
-  }
-  if (!out.length) {
-    throw new AuditError('no parts found: provide a Markdown table with an MPN column (optional: Refdes, Required qty)');
-  }
-  return out;
-}
-
-function exactMpn(results: PartResult[], mpn: string): PartResult | undefined {
-  const requested = mpn.trim().toUpperCase();
-  return results.find((part) => part.mpn.trim().toUpperCase() === requested);
-}
-
-function auditRow(input: AuditInputRow, results: PartResult[]): PartAuditFinding {
-  const part = exactMpn(results, input.mpn);
-  if (!part) {
-    return { ...input, status: 'failure', issues: ['exact MPN was not returned by the selected provider'] };
-  }
+function assessPart(part: PartResult, requiredQuantity?: number): PartCandidate {
   const issues: string[] = [];
   let status: AuditStatus = 'pass';
   const lifecycle = part.lifecycle.trim().toLowerCase();
-  if (['eol', 'obsolete', 'end-of-life'].includes(lifecycle)) {
+  if (['eol', 'obsolete', 'end-of-life', 'end of life'].includes(lifecycle)) {
     status = 'failure';
-    issues.push(`lifecycle is ${part.lifecycle}`);
+    issues.push(`Lifecycle: ${part.lifecycle}`);
   }
   if (part.stockTotal <= 0) {
     status = 'failure';
-    issues.push('reported stock is zero');
-  } else if (input.requiredQuantity !== undefined && part.stockTotal < input.requiredQuantity) {
+    issues.push('Out of stock');
+  } else if (requiredQuantity !== undefined && part.stockTotal < requiredQuantity) {
     status = 'failure';
-    issues.push(`reported stock ${part.stockTotal} is below required quantity ${input.requiredQuantity}`);
+    issues.push(`Not enough stock: need ${requiredQuantity.toLocaleString('en-US')}`);
   }
-  if (lifecycle === 'unknown') {
-    issues.push('lifecycle was not supplied by the provider');
-  }
-  if (!part.datasheetUrl) {
-    issues.push('datasheet URL was not supplied by the provider');
-  }
+  const missing: string[] = [];
+  if (!lifecycle || lifecycle === 'unknown') missing.push('lifecycle');
+  if (!part.datasheetUrl) missing.push('datasheet');
+  if (missing.length) issues.push(`Supplier did not provide ${missing.join(' or ')}`);
   if (status !== 'failure' && issues.length) status = 'warning';
-  return { ...input, status, issues, part };
+  return { status, issues, part };
+}
+
+function auditRow(input: AuditInputRow, results: PartResult[]): PartAuditFinding {
+  const requested = (input.mpn ?? input.query).trim().toUpperCase();
+  const exact = results.find((part) => [part.mpn, part.supplierPartNumber].some((id) => id?.trim().toUpperCase() === requested));
+  if (exact) return { ...input, match: 'exact', ...assessPart(exact, input.requiredQuantity) };
+  if (input.mpn || !results.length) {
+    return { ...input, match: 'none', status: 'failure', issues: [input.mpn
+      ? 'Exact part number was not returned by the supplier. Check the number or try a part name.'
+      : 'No matches returned. Try a shorter name, a package, or an exact part number.'] };
+  }
+  const seen = new Set<string>();
+  const candidates = results.filter((part) => {
+    const key = (part.supplierPartNumber ?? part.mpn).toUpperCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((part) => assessPart(part, input.requiredQuantity))
+    // Preserve supplier relevance within each stock/lifecycle group.
+    .sort((a, b) => Number(a.status === 'failure') - Number(b.status === 'failure')).slice(0, 3);
+  return { ...input, match: 'candidates', status: 'warning', issues: ['Choose a candidate and check its specifications; compatibility has not been verified.'], candidates };
 }
 
 function cell(value: string | number | undefined): string {
   return String(value ?? '—').replaceAll('|', '\\|').replace(/\r?\n/g, ' ');
 }
 
-function price(part: PartResult | undefined): string {
-  const found = part?.priceBreaks[0];
-  return found ? `${found.unitPrice}${found.currency ? ` ${found.currency}` : ''} @ ${found.quantity}` : '—';
+function price(part: PartResult | undefined, requiredQuantity?: number): string {
+  const breaks = [...(part?.priceBreaks ?? [])].sort((a, b) => a.quantity - b.quantity);
+  const eligible = breaks.filter((entry) => entry.quantity <= (requiredQuantity ?? 1));
+  const found = eligible.at(-1) ?? breaks[0];
+  return found ? `${found.unitPrice}${found.currency ? ` ${terminalText(found.currency)}` : ''}/each (${found.quantity}+${found.currency ? '' : '; currency unknown'})` : 'not supplied';
 }
 
 function terminalText(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
 }
 
-function terminalFinding(finding: PartAuditFinding): string[] {
-  const label = [finding.refdes, finding.mpn].filter(Boolean).map((value) => terminalText(value!)).join(' · ');
-  const lines = [`  ${label}`];
-  if (finding.part) {
-    const stock = finding.part.stockTotal.toLocaleString('en-US');
-    const needed = finding.requiredQuantity === undefined ? '' : ` (need ${finding.requiredQuantity.toLocaleString('en-US')})`;
-    lines.push(`    Stock: ${stock}${needed} · Price: ${price(finding.part)}`);
-  } else if (finding.requiredQuantity !== undefined) {
-    lines.push(`    Needed: ${finding.requiredQuantity.toLocaleString('en-US')}`);
+function partDetails(candidate: PartCandidate, quantity: number | undefined, indent: string): string[] {
+  const { part, issues } = candidate;
+  const identity = [part.manufacturer === 'unknown' ? undefined : part.manufacturer, part.package, part.supplierPartNumber].filter(Boolean);
+  const lines: string[] = [];
+  if (identity.length) lines.push(`${indent}${identity.map((value) => terminalText(value!)).join(' · ')}`);
+  if (part.description) {
+    const description = terminalText(part.description);
+    lines.push(`${indent}${description.length > 120 ? `${description.slice(0, 117)}…` : description}`);
   }
-  if (finding.issues.length) lines.push(`    ${finding.issues.map(terminalText).join('; ')}`);
+  const needed = quantity === undefined ? '' : ` (need ${quantity.toLocaleString('en-US')})`;
+  lines.push(`${indent}Stock: ${part.stockTotal.toLocaleString('en-US')}${needed} · Price: ${price(part, quantity)}`);
+  if (issues.length) lines.push(`${indent}${candidate.status === 'failure' ? 'Reason' : 'Review'}: ${issues.map(terminalText).join('; ')}`);
+  if (part.supplierUrl) lines.push(`${indent}Part: ${terminalText(part.supplierUrl)}`);
+  if (part.datasheetUrl) lines.push(`${indent}Datasheet: ${terminalText(part.datasheetUrl)}`);
   return lines;
 }
 
-/** Compact text for the terminal; the Markdown report remains available through --output. */
+function groups(findings: PartAuditFinding[]) {
+  return {
+    available: findings.filter((f) => f.match === 'exact' && f.status !== 'failure'),
+    unavailable: findings.filter((f) => f.match === 'exact' && f.status === 'failure'),
+    candidates: findings.filter((f) => f.match === 'candidates'),
+    missing: findings.filter((f) => f.match === 'none'),
+    review: findings.filter((f) => f.match === 'exact' && f.status === 'warning'),
+  };
+}
+
+/** Human-readable results with mutually exclusive match counts and separate metadata notes. */
 export function formatPartCheckTerminal(result: PartAuditResult): string {
-  const available = result.findings.filter((finding) => finding.status === 'pass');
-  const review = result.findings.filter((finding) => finding.status === 'warning');
-  const unavailable = result.findings.filter((finding) => finding.status === 'failure');
+  const { available, unavailable, candidates, missing, review } = groups(result.findings);
+  const counts = [
+    `${available.length} available${review.length ? ` (${review.length} need${review.length === 1 ? 's' : ''} review)` : ''}`,
+    `${unavailable.length} unavailable`,
+    ...(candidates.length ? [`${candidates.length} to choose`] : []),
+    ...(missing.length ? [`${missing.length} not found`] : []),
+  ];
   const lines = [
     `Parts check · ${terminalText(result.input)}`,
     `${result.provider === 'jlcsearch' ? 'JLCSearch' : 'Nexar'} · ${result.findings.length} part${result.findings.length === 1 ? '' : 's'} checked`,
-    `${available.length} available · ${review.length} to review · ${unavailable.length} unavailable`,
+    counts.join(' · '),
   ];
   for (const [heading, findings] of [
-    ['Available', available],
-    ['Needs review', review],
-    ['Not available', unavailable],
+    ['Available', available], ['Choose a part', candidates], ['Not available', unavailable], ['Not found', missing],
   ] as const) {
     if (!findings.length) continue;
     lines.push('', `${heading} (${findings.length})`);
-    for (const finding of findings) lines.push(...terminalFinding(finding));
+    for (const finding of findings) {
+      const label = [finding.refdes, finding.query].filter(Boolean).join(' · ');
+      lines.push(`  ${terminalText(label)} · line ${finding.line}`);
+      if (finding.part) {
+        lines.push(`    Exact match: ${terminalText(finding.part.mpn)}`);
+        lines.push(...partDetails({ part: finding.part, status: finding.status, issues: finding.issues }, finding.requiredQuantity, '    '));
+      } else if (finding.candidates) {
+        lines.push(`    ${finding.candidates.length} suggested match${finding.candidates.length === 1 ? '' : 'es'} — check specifications before choosing`);
+        for (const [index, candidate] of finding.candidates.entries()) {
+          lines.push(`    ${index + 1}. ${terminalText(candidate.part.mpn)} · ${candidate.status === 'failure' ? 'unavailable for this request' : 'in stock'}`);
+          lines.push(...partDetails(candidate, finding.requiredQuantity, '       '));
+        }
+      } else lines.push(`    ${finding.issues.map(terminalText).join('; ')}`);
+      lines.push('');
+    }
+    if (lines.at(-1) === '') lines.pop();
   }
+  if (candidates.length) lines.push('', 'To check a candidate exactly, add its MPN or LCSC number to the file (e.g. MPN: NE555P) and run again.');
   lines.push('', 'Stock and prices are supplier snapshots, not ordering guarantees.');
   if (result.output) lines.push(`Report: ${terminalText(result.output)}`);
   lines.push(`Run log: .copperhead/runs/${path.basename(result.transcriptDir)}`);
@@ -174,50 +176,64 @@ export function formatPartCheckTerminal(result: PartAuditResult): string {
 
 function findingLabel(finding: PartAuditFinding): string {
   const quantity = finding.requiredQuantity === undefined ? '' : ` (need ${finding.requiredQuantity})`;
-  return `${finding.refdes ? `${finding.refdes} · ` : ''}${finding.mpn}${quantity}`;
+  return `${finding.refdes ? `${finding.refdes} · ` : ''}${finding.query}${quantity} · line ${finding.line}`;
+}
+
+function markdownMetadata(part: PartResult): string[] {
+  const identity = [part.manufacturer === 'unknown' ? undefined : part.manufacturer, part.package, part.supplierPartNumber].filter(Boolean);
+  return [
+    ...(identity.length ? [`  - ${cell(identity.join(' · '))}`] : []),
+    ...(part.description ? [`  - ${cell(part.description)}`] : []),
+    ...(part.supplierUrl ? [`  - Part: ${cell(part.supplierUrl)}`] : []),
+    ...(part.datasheetUrl ? [`  - Datasheet: ${cell(part.datasheetUrl)}`] : []),
+  ];
 }
 
 export function formatPartAudit(result: Omit<PartAuditResult, 'report' | 'output'>): string {
-  const available = result.findings.filter((finding) => finding.status === 'pass');
-  const unavailable = result.findings.filter((finding) => finding.status === 'failure');
-  const review = result.findings.filter((finding) => finding.status === 'warning');
+  const { available, unavailable, candidates, missing, review } = groups(result.findings);
   const lines = [
-    '# Parts availability check',
-    '',
-    `- **Input:** ${result.input}`,
+    '# Parts availability check', '',
+    `- **Input:** ${cell(result.input)}`,
     `- **Provider:** ${result.provider}`,
-    `- **Outcome:** ${!result.ok ? 'FAIL' : review.length ? 'NEEDS REVIEW' : 'PASS'}`,
-    `- **Run log:** ${result.transcriptDir}`,
-    '',
-    '## Available now',
-    '',
-    ...(available.length
-      ? available.map((finding) => `- ${findingLabel(finding)} — ${finding.part!.stockTotal} in stock; ${price(finding.part)}`)
-      : ['- None']),
-    '',
-    '## Not available',
-    '',
-    ...(unavailable.length
-      ? unavailable.map((finding) => `- ${findingLabel(finding)} — ${finding.issues.join('; ')}`)
-      : ['- None']),
-    '',
-    '## Needs review',
-    '',
-    ...(review.length
-      ? review.map((finding) => `- ${findingLabel(finding)} — ${finding.issues.join('; ')}`)
-      : ['- None']),
-    '',
-    '## Detail',
-    '',
-    '| Refdes | MPN | Required qty | Status | Stock | Lifecycle | Price | Datasheet | Notes |',
-    '|---|---|---:|---|---:|---|---|---|---|',
+    `- **Outcome:** ${!result.ok ? 'FAIL' : review.length || candidates.length ? 'NEEDS REVIEW' : 'PASS'}`,
+    `- **Run log:** ${result.transcriptDir}`, '',
+    'A part can be available and need review when supplier metadata is incomplete.', '',
+    '## Available now', '',
+    ...(available.length ? available.flatMap((f) => [
+      `- ${cell(findingLabel(f))} — ${f.part!.stockTotal} in stock; ${price(f.part, f.requiredQuantity)}${f.status === 'warning' ? '; needs review' : ''}`,
+      ...markdownMetadata(f.part!),
+    ]) : ['- None']), '',
+    '## Not available', '',
+    ...(unavailable.length ? unavailable.flatMap((f) => [
+      `- ${cell(findingLabel(f))} — ${cell(f.issues.join('; '))}`,
+      ...markdownMetadata(f.part!),
+    ]) : ['- None']), '',
+    '## Not found', '',
+    ...(missing.length ? missing.map((f) => `- ${cell(findingLabel(f))} — ${cell(f.issues.join('; '))}`) : ['- None']), '',
+    '## Needs review', '',
+    ...(review.length ? review.map((f) => `- ${cell(findingLabel(f))} — ${cell(f.issues.join('; '))}`) : ['- None']), '',
+    '## Choose a part', '',
+    'Suggested matches are not confirmed selections. Check specifications and rerun with the chosen MPN or LCSC number.', '',
   ];
+  if (!candidates.length) lines.push('- None', '');
+  for (const finding of candidates) {
+    lines.push(`### ${cell(findingLabel(finding))}`, '');
+    for (const candidate of finding.candidates!) {
+      const p = candidate.part;
+      lines.push(`- **${cell(p.mpn)}** — ${candidate.status === 'failure' ? 'unavailable for this request' : 'in stock'}; ${p.stockTotal} in stock; ${price(p, finding.requiredQuantity)}`);
+      lines.push(...markdownMetadata(p));
+      if (candidate.issues.length) lines.push(`  - ${candidate.status === 'failure' ? 'Reason' : 'Review'}: ${cell(candidate.issues.join('; '))}`);
+    }
+    lines.push('');
+  }
+  lines.push('## Detail', '',
+    '| Refdes | MPN | Required qty | Status | Stock | Lifecycle | Price | Datasheet | Notes |',
+    '|---|---|---:|---|---:|---|---|---|---|');
   for (const finding of result.findings) {
     lines.push([
-      cell(finding.refdes), cell(finding.mpn), cell(finding.requiredQuantity), finding.status.toUpperCase(),
-      cell(finding.part?.stockTotal), cell(finding.part?.lifecycle), cell(price(finding.part)),
-      finding.part?.datasheetUrl ? '[link](' + finding.part.datasheetUrl + ')' : '—',
-      cell(finding.issues.join('; ') || '—'),
+      cell(finding.refdes), cell(finding.part?.mpn ?? finding.query), cell(finding.requiredQuantity), finding.match === 'candidates' ? 'CHOOSE A PART' : finding.status.toUpperCase(),
+      cell(finding.part?.stockTotal), cell(finding.part?.lifecycle), cell(price(finding.part, finding.requiredQuantity)),
+      cell(finding.part?.datasheetUrl), cell(finding.issues.join('; ') || '—'),
     ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
   }
   lines.push('', 'Stock and pricing are retrieval-time supplier snapshots, not an ordering guarantee.');
@@ -267,14 +283,20 @@ export async function runPartAudit(opts: PartAuditOptions): Promise<PartAuditRes
   const providerName = researchConfig(config).provider;
   const provider: PartDataProvider = providerName === 'nexar' ? new NexarPartProvider() : new JlcSearchProvider();
   await transcript.event('part-audit-start', { input, provider: providerName, rows: rows.length });
-  let findings: PartAuditFinding[] = [];
+  const findings: PartAuditFinding[] = [];
+  const cache = new Map<string, PartResult[]>();
   let failure: unknown;
   try {
     for (const row of rows) {
-      const results = await provider.search(ctx, row.mpn, row.mpn);
+      const key = row.query.toUpperCase();
+      let results = cache.get(key);
+      if (!results) {
+        results = await provider.search(ctx, row.query, row.mpn);
+        cache.set(key, results);
+      }
       const finding = auditRow(row, results);
       findings.push(finding);
-      await transcript.event('part-audit-row', { mpn: row.mpn, refdes: row.refdes, status: finding.status, issues: finding.issues });
+      await transcript.event('part-audit-row', { query: row.query, line: row.line, mpn: row.mpn, refdes: row.refdes, match: finding.match, status: finding.status, issues: finding.issues });
     }
   } catch (err) {
     failure = err;
@@ -290,7 +312,7 @@ export async function runPartAudit(opts: PartAuditOptions): Promise<PartAuditRes
   }
   await transcript.event('part-audit-finish', { ok, findings: findings.length, ...(failure ? { error: (failure as Error).message } : {}) });
   await transcript.writeSummary({
-    request: `audit ${input}`,
+    request: `parts check ${input}`,
     changeId: null,
     plan: 'Live, model-free supplier audit; no BOM or constraint snapshots were written.',
     filesTouched: output ? [output] : [],

@@ -186,7 +186,7 @@ const partsGroup = program
 
 partsGroup
   .command('check <file>')
-  .description('check live supplier availability for a parts list (requires research.enabled)')
+  .description('search parts mentioned in Markdown and check live availability (requires research.enabled)')
   .option('--output <path>', 'write the Markdown report to this repo-relative path')
   .action(async (file: string, opts: { output?: string }) => {
     const repo = repoOf(program.opts());

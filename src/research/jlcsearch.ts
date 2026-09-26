@@ -16,7 +16,7 @@ function text(value: unknown): string | undefined {
 
 function number(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string') return undefined;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
   const parsed = Number(value.replace(/[$,\s]/g, ''));
   return Number.isFinite(parsed) ? parsed : undefined;
 }
@@ -55,8 +55,15 @@ function normalize(component: unknown): PartResult | null {
   const datasheet = record(extra.datasheet);
   const datasheetUrl = firstText(datasheet.pdf, extra.datasheet_pdf, raw.datasheetUrl);
   const lifecycle = firstText(extra.lifecycle, raw.lifecycle, raw.lifecycleStatus) ?? 'unknown';
+  const description = firstText(raw.description, extra.description);
+  const pkg = firstText(raw.package, extra.package);
+  const lcsc = String(raw.lcsc ?? extra.lcsc ?? '').replace(/^C/i, '');
+  const supplierPartNumber = /^\d+$/.test(lcsc) ? `C${lcsc}` : undefined;
   return {
     mpn,
+    ...(description ? { description } : {}),
+    ...(pkg ? { package: pkg } : {}),
+    ...(supplierPartNumber ? { supplierPartNumber, supplierUrl: `https://jlcsearch.tscircuit.com/components/list?search=${supplierPartNumber}` } : {}),
     manufacturer: firstText(manufacturer.name, extra.manufacturerName, raw.manufacturer) ?? 'unknown',
     lifecycle,
     stockTotal: stock,

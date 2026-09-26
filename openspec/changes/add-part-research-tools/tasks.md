@@ -63,5 +63,14 @@
 - [x] 7.1 Update `.env.example` with `BRAVE_API_KEY`, `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET`
 - [x] 7.2 Draft SPEC.md edits for archive time: §7 scoped network boundary replaces "no network tools", §4.2 tool table gains research tools, §8 marks part-data item pulled forward
 - [x] 7.3 README: document research setup, offline behavior (graceful degradation), and the `VERIFIED(datasheet)` flag meaning
-- [x] 7.5 README/SPEC: document `audit` as an explicit live-network, model-free command and keep `check` offline
+- [x] 7.5 README/SPEC: document `parts check` as an explicit live-network, model-free command and keep `check` offline
 - [ ] 7.4 Coordinate with build-copperhead-phase-1: this change's safety-rails deltas modify requirements introduced there; archive phase-1 first (or sync its specs) so the MODIFIED blocks land against existing main specs
+
+## 8. Markdown discovery and readable candidate results
+
+- [x] 8.1 Extract names/numbers from tables, lists, and prose with source lines and a bounded query count
+- [x] 8.2 Preserve exact identifier requirements and show at most three distinct candidates for broad queries
+- [x] 8.3 Separate availability, candidate choices, and missing matches; include package, description, links, and quantity pricing
+- [x] 8.4 Cover extraction/matching/reporting with regression tests, typecheck/build, and a live JLCSearch smoke check
+
+Verification for section 8: 43 focused research tests, typecheck, CLI build, OpenSpec validation, and the live JLCSearch example passed. Full suite: 1020 passed, 9 failed, 21 skipped; remaining failures match the existing KiCad fixture/path and REPL-timeout failures. Live LLM tests were not run.

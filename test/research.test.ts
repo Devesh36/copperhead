@@ -457,7 +457,7 @@ describe('live part audit command', () => {
     expect(await readFile(path.join(repo, 'audit-report.md'), 'utf8')).toContain('| R1 | TEST-1 | 10 | PASS | 25 | active |');
     const terminal = formatPartCheckTerminal(result);
     expect(terminal).toContain('Available (1)');
-    expect(terminal).toContain('Stock: 25 (need 10) · Price: 0.12 @ 1');
+    expect(terminal).toContain('Stock: 25 (need 10) · Price: 0.12/each (1+; currency unknown)');
     expect(terminal).toContain('Report: audit-report.md');
     expect(terminal).not.toContain('| Refdes |');
     expect(await readFile(path.join(result.transcriptDir, 'transcript.jsonl'), 'utf8')).toContain('network-request');
@@ -476,8 +476,8 @@ describe('live part audit command', () => {
     const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
 
     expect(result.ok).toBe(false);
-    expect(result.findings[0]).toMatchObject({ status: 'failure', issues: ['exact MPN was not returned by the selected provider'] });
-    expect(formatPartCheckTerminal(result)).toContain('Not available (1)');
+    expect(result.findings[0]).toMatchObject({ status: 'failure', match: 'none' });
+    expect(formatPartCheckTerminal(result)).toContain('Not found (1)');
   });
 
   it('surfaces provider outages instead of reporting parts unavailable', async () => {
@@ -493,29 +493,165 @@ describe('live part audit command', () => {
     expect(error).toMatchObject({ status: 503 });
   });
 
-  it('prints warning rows only under Needs review, not Available now', async () => {
+  it('counts a stocked part as available while flagging missing metadata for review', async () => {
     const repo = await mkdtemp(path.join(tmpdir(), 'part-audit-warning-')); repos.push(repo);
     await mkdir(path.join(repo, '.copperhead'), { recursive: true });
     await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({
       research: { enabled: true, provider: 'jlcsearch', allowHosts: ['jlcsearch.tscircuit.com'] },
     }));
-    await writeFile(path.join(repo, 'parts.md'), '| MPN |\n|---|\n| TEST-1 |\n');
+    await writeFile(path.join(repo, 'parts.md'), '| MPN | Required qty |\n|---|---:|\n| TEST-1 | 10 |\n');
     globalThis.fetch = async () => new Response('{"components":[{"mfr":"TEST-1","stock":25,"extra":{"mpn":"TEST-1"}}]}', { status: 200 });
     const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
     expect(result.findings[0]?.status).toBe('warning');
     const available = result.report.split('## Not available')[0]!;
     const review = result.report.split('## Needs review')[1]!.split('## Detail')[0]!;
-    expect(available).not.toContain('TEST-1');
+    expect(available).toContain('TEST-1');
+    expect(available).toContain('25 in stock');
+    expect(available).toContain('needs review');
     expect(review).toContain('TEST-1');
     expect(result.report).toContain('**Outcome:** NEEDS REVIEW');
     const terminal = formatPartCheckTerminal(result);
-    expect(terminal).toContain('Needs review (1)');
-    expect(terminal).toContain('Stock: 25');
-    expect(terminal).not.toContain('Available (0)');
+    expect(terminal).toContain('1 available (1 needs review) · 0 unavailable');
+    expect(terminal).toContain('Available (1)');
+    expect(terminal).toContain('Stock: 25 (need 10)');
+    expect(terminal).toContain('Review: Supplier did not provide lifecycle or datasheet');
   });
 
-  it('requires a delimited MPN table and validates required quantities', () => {
-    expect(() => parsePartAuditInput('# parts\n\n- MPN: TEST-1\n')).toThrow(/MPN column/);
+  it('accepts explicit identifiers in lists and validates required quantities', () => {
+    expect(parsePartAuditInput('# parts\n\n- MPN: TEST-1\n')).toEqual([{ query: 'TEST-1', mpn: 'TEST-1', line: 3 }]);
     expect(() => parsePartAuditInput('| MPN | Required qty |\n|---|---:|\n| TEST-1 | 1.5 |\n')).toThrow(AuditError);
+  });
+});
+
+
+describe('Markdown part discovery', () => {
+  it('reads names, identifiers, prose, links, references and quantities with source lines', () => {
+    expect(parsePartAuditInput([
+      '# Prototype', '- 10k resistor (10 pcs)', '- ESP32 module',
+      'Use NE555P for the timer.', '- R1: MPN: [0603WAF1001T5E](https://example.com) qty: 20',
+      '- LCSC: 21190',
+    ].join('\n'))).toEqual([
+      { query: '10k resistor', requiredQuantity: 10, line: 2 },
+      { query: 'ESP32 module', line: 3 },
+      { query: 'NE555P', line: 4 },
+      { query: '0603WAF1001T5E', mpn: '0603WAF1001T5E', refdes: 'R1', requiredQuantity: 20, line: 5 },
+      { query: 'C21190', mpn: 'C21190', line: 6 },
+    ]);
+  });
+
+  it('reads name/value/package tables and falls back from placeholder MPNs', () => {
+    expect(parsePartAuditInput('Part | Value | Package | MPN | Qty\n---|---|---|---|---\nresistor | 10k | 0603 | TBD | 10\n')).toEqual([
+      { query: 'resistor 10k 0603', requiredQuantity: 10, line: 3 },
+    ]);
+    expect(parsePartAuditInput('| LCSC |\n|---|\n| 21190 |')[0]).toMatchObject({ query: 'C21190', mpn: 'C21190' });
+  });
+
+  it('ignores code, comments, non-part tables, excluded sections and common units', () => {
+    const md = [
+      '# Overview', '<!-- Use FAKE123 -->', '```md', '- WRONG123', '```',
+      '    const FAKE456 = 1', '| Pin | Signal |', '|---|---|', '| 1 | GPIO12 |',
+      'The board must run at 3.3V and 100mA.', '# Out of scope', '- NE555P',
+      '# Components', '- LM358',
+    ].join('\n');
+    expect(parsePartAuditInput(md)).toEqual([{ query: 'LM358', line: 14 }]);
+  });
+
+  it('deduplicates repeated mentions and retains distinct references', () => {
+    expect(parsePartAuditInput('- NE555P\n- ne555p\n- U1: NE555P\n- U2: NE555P')).toHaveLength(3);
+  });
+
+  it('preserves slash and underscore characters in explicit part numbers', () => {
+    expect(parsePartAuditInput('- MPN: MCP6002-I/SN')[0]?.mpn).toBe('MCP6002-I/SN');
+    expect(parsePartAuditInput('- MPN: TEST_123')[0]?.mpn).toBe('TEST_123');
+    expect(parsePartAuditInput('- __TEST_123__')[0]?.query).toBe('TEST_123');
+  });
+
+  it('keeps part qualifiers and drops surrounding prose fragments', () => {
+    const parts = parsePartAuditInput([
+      'Use an ESP32 module for the controller.',
+      'Boot from external QSPI flash and enumerate over USB.',
+      'Expose GPIO on two 0.1" headers, breadboard-compatible.',
+      'A starting point for other designs, not a Pico clone.',
+      'Crystal: 12MHz, per the RP2040 hardware design guide.',
+      '2-layer if the crystal allows it, 4-layer otherwise.',
+    ].join('\n'));
+    expect(parts.map((p) => p.query)).toEqual([
+      'ESP32 module', 'QSPI flash', '0.1" headers', 'Crystal 12MHz', 'RP2040', 'crystal',
+    ]);
+  });
+
+  it('rejects empty input and too many queries before issuing requests', () => {
+    expect(() => parsePartAuditInput('# Overview\n<!-- none -->')).toThrow(/no parts found/);
+    expect(() => parsePartAuditInput('GPIO12\n100mA\nQFN32\n2500mAh\n10C\nI2C')).toThrow(/no parts found/);
+    expect(() => parsePartAuditInput('- NE555P qty: -2')).toThrow(/positive whole number/);
+    expect(() => parsePartAuditInput('- NE555P qty: lots')).toThrow(/positive whole number/);
+    expect(() => parsePartAuditInput(Array.from({ length: 51 }, (_, i) => `- MPN: TEST-${i}`).join('\n'))).toThrow(/more than 50/);
+  });
+});
+
+describe('part search candidates', () => {
+  async function searchRepo(input: string): Promise<string> {
+    const repo = await mkdtemp(path.join(tmpdir(), 'part-search-')); repos.push(repo);
+    await mkdir(path.join(repo, '.copperhead'));
+    await writeFile(path.join(repo, '.copperhead', 'config.json'), JSON.stringify({ research: { enabled: true } }));
+    await writeFile(path.join(repo, 'parts.md'), input);
+    return repo;
+  }
+
+  it('shows up to three distinct candidates and never counts suggestions as selected parts', async () => {
+    const repo = await searchRepo('- 10k resistor qty: 10');
+    globalThis.fetch = async () => new Response(JSON.stringify({ components: [
+      { mfr: 'EMPTY', lcsc: 1, stock: 0 },
+      { mfr: 'R-ONE', lcsc: 2, stock: 20, package: '0603', description: '10k resistor', price: 0.01 },
+      { mfr: 'R-ONE', lcsc: 2, stock: 20 },
+      { mfr: 'R-TWO', lcsc: 3, stock: 30 },
+      { mfr: 'R-THREE', lcsc: 4, stock: 40 },
+      { mfr: 'R-FOUR', lcsc: 5, stock: 50 },
+    ] }));
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
+    expect(result.ok).toBe(true); // A completed search, not an automatic selection.
+    expect(result.findings[0]).toMatchObject({ query: '10k resistor', match: 'candidates', status: 'warning' });
+    expect(result.findings[0]?.part).toBeUndefined();
+    expect(result.findings[0]?.candidates?.map((c) => c.part.mpn)).toEqual(['R-ONE', 'R-TWO', 'R-THREE']);
+    const terminal = formatPartCheckTerminal(result);
+    expect(terminal).toContain('0 available · 0 unavailable · 1 to choose');
+    expect(terminal).toContain('10k resistor · line 1');
+    expect(terminal).toContain('0603 · C2');
+    expect(terminal).toContain('https://jlcsearch.tscircuit.com/components/list?search=C2');
+    expect(result.report).toContain('**Outcome:** NEEDS REVIEW');
+    expect(result.report).toContain('R-THREE');
+    expect(result.report).not.toContain('R-FOUR');
+  });
+
+  it('recognizes an LCSC number exactly and uses the applicable quantity price', async () => {
+    const repo = await searchRepo('- LCSC: C21190 qty: 25');
+    globalThis.fetch = async () => new Response(JSON.stringify({ components: [{
+      mfr: '0603WAF1001T5E', lcsc: 21190, stock: 100, extra: { prices: [
+        { quantity: 100, price: 0.01, currency: 'USD' },
+        { quantity: 1, price: 0.10, currency: 'USD' },
+        { quantity: 10, price: 0.05, currency: 'USD' },
+      ] },
+    }] }));
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
+    expect(result.findings[0]).toMatchObject({ match: 'exact', part: { supplierPartNumber: 'C21190' } });
+    expect(formatPartCheckTerminal(result)).toContain('0.05 USD/each (10+)');
+  });
+
+  it('reuses a lookup while checking each reference against its own quantity', async () => {
+    const repo = await searchRepo('| Refdes | MPN | Qty |\n|---|---|---|\n| U1 | NE555P | 2 |\n| U2 | NE555P | 20 |');
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ components: [{ mfr: 'NE555P', stock: 10 }] })); };
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
+    expect(calls).toBe(1);
+    expect(result.findings.map((f) => f.status)).toEqual(['warning', 'failure']);
+    expect(formatPartCheckTerminal(result)).toContain('1 available (1 needs review) · 1 unavailable');
+  });
+
+  it('labels zero results as not found rather than out of stock', async () => {
+    const repo = await searchRepo('- unicorn sensor');
+    globalThis.fetch = async () => new Response('{"components":[]}');
+    const result = await runPartAudit({ repoRoot: repo, input: 'parts.md' });
+    expect(result.ok).toBe(false);
+    expect(formatPartCheckTerminal(result)).toContain('0 available · 0 unavailable · 1 not found');
   });
 });

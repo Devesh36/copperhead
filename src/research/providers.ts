@@ -19,6 +19,10 @@ export interface PriceBreak {
 
 export interface PartResult {
   mpn: string;
+  description?: string;
+  package?: string;
+  supplierPartNumber?: string;
+  supplierUrl?: string;
   manufacturer: string;
   lifecycle: string;
   stockTotal: number;
