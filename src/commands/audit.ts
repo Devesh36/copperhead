@@ -81,7 +81,7 @@ export function parsePartAuditInput(markdown: string): AuditInputRow[] {
     }
   }
   if (!out.length) {
-    throw new AuditError('no audit rows found: provide a Markdown table with an MPN column (optional: Refdes, Required qty)');
+    throw new AuditError('no parts found: provide a Markdown table with an MPN column (optional: Refdes, Required qty)');
   }
   return out;
 }
@@ -129,6 +129,49 @@ function price(part: PartResult | undefined): string {
   return found ? `${found.unitPrice}${found.currency ? ` ${found.currency}` : ''} @ ${found.quantity}` : '—';
 }
 
+function terminalText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+}
+
+function terminalFinding(finding: PartAuditFinding): string[] {
+  const label = [finding.refdes, finding.mpn].filter(Boolean).map((value) => terminalText(value!)).join(' · ');
+  const lines = [`  ${label}`];
+  if (finding.part) {
+    const stock = finding.part.stockTotal.toLocaleString('en-US');
+    const needed = finding.requiredQuantity === undefined ? '' : ` (need ${finding.requiredQuantity.toLocaleString('en-US')})`;
+    lines.push(`    Stock: ${stock}${needed} · Price: ${price(finding.part)}`);
+  } else if (finding.requiredQuantity !== undefined) {
+    lines.push(`    Needed: ${finding.requiredQuantity.toLocaleString('en-US')}`);
+  }
+  if (finding.issues.length) lines.push(`    ${finding.issues.map(terminalText).join('; ')}`);
+  return lines;
+}
+
+/** Compact text for the terminal; the Markdown report remains available through --output. */
+export function formatPartCheckTerminal(result: PartAuditResult): string {
+  const available = result.findings.filter((finding) => finding.status === 'pass');
+  const review = result.findings.filter((finding) => finding.status === 'warning');
+  const unavailable = result.findings.filter((finding) => finding.status === 'failure');
+  const lines = [
+    `Parts check · ${terminalText(result.input)}`,
+    `${result.provider === 'jlcsearch' ? 'JLCSearch' : 'Nexar'} · ${result.findings.length} part${result.findings.length === 1 ? '' : 's'} checked`,
+    `${available.length} available · ${review.length} to review · ${unavailable.length} unavailable`,
+  ];
+  for (const [heading, findings] of [
+    ['Available', available],
+    ['Needs review', review],
+    ['Not available', unavailable],
+  ] as const) {
+    if (!findings.length) continue;
+    lines.push('', `${heading} (${findings.length})`);
+    for (const finding of findings) lines.push(...terminalFinding(finding));
+  }
+  lines.push('', 'Stock and prices are supplier snapshots, not ordering guarantees.');
+  if (result.output) lines.push(`Report: ${terminalText(result.output)}`);
+  lines.push(`Run log: .copperhead/runs/${path.basename(result.transcriptDir)}`);
+  return lines.join('\n');
+}
+
 function findingLabel(finding: PartAuditFinding): string {
   const quantity = finding.requiredQuantity === undefined ? '' : ` (need ${finding.requiredQuantity})`;
   return `${finding.refdes ? `${finding.refdes} · ` : ''}${finding.mpn}${quantity}`;
@@ -139,12 +182,12 @@ export function formatPartAudit(result: Omit<PartAuditResult, 'report' | 'output
   const unavailable = result.findings.filter((finding) => finding.status === 'failure');
   const review = result.findings.filter((finding) => finding.status === 'warning');
   const lines = [
-    '# Parts availability audit',
+    '# Parts availability check',
     '',
     `- **Input:** ${result.input}`,
     `- **Provider:** ${result.provider}`,
-    `- **Outcome:** ${result.ok ? 'PASS' : 'FAIL'}`,
-    `- **Audit transcript:** ${result.transcriptDir}`,
+    `- **Outcome:** ${!result.ok ? 'FAIL' : review.length ? 'NEEDS REVIEW' : 'PASS'}`,
+    `- **Run log:** ${result.transcriptDir}`,
     '',
     '## Available now',
     '',
@@ -212,7 +255,7 @@ export async function runPartAudit(opts: PartAuditOptions): Promise<PartAuditRes
   const config = await loadConfig(opts.repoRoot);
   if (!researchPartToolGate(config)) {
     throw new AuditError(
-      'part audit requires research.enabled=true in .copperhead/config.json; Nexar also requires NEXAR_CLIENT_ID and NEXAR_CLIENT_SECRET',
+      'parts check requires research.enabled=true in .copperhead/config.json; Nexar also requires NEXAR_CLIENT_ID and NEXAR_CLIENT_SECRET',
     );
   }
   const inputPath = resolveInRepo(opts.repoRoot, opts.input);

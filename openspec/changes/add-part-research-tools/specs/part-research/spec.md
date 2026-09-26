@@ -73,12 +73,12 @@ Any constraint or doc claim derived from fetched material SHALL cite the cached 
 table with an `MPN` column and optional `Refdes` and `Required qty` columns.
 When part research is enabled and its selected provider is credential-ready, it
 SHALL query each MPN through the same allowlisted egress module, require an
-exact MPN match, and emit a Markdown report containing status, stock, lifecycle,
-price, and datasheet availability. It SHALL make zero LLM calls and SHALL NOT
+exact MPN match, and print a concise terminal summary containing status, stock,
+price, and missing evidence. It SHALL make zero LLM calls and SHALL NOT
 write BOM.md or constraints.json. Missing exact results, zero/insufficient
 stock, and EOL lifecycle SHALL fail the command; unknown lifecycle and absent
-datasheet metadata SHALL warn. `--output` MAY write the report only inside the
-repository root.
+datasheet metadata SHALL warn. `--output` MAY write a detailed Markdown report
+only inside the repository root.
 
 #### Scenario: Exact audit is non-mutating
 - **WHEN** a table lists `R1`, an exact MPN, and a required quantity that the

@@ -180,9 +180,9 @@ copperhead parts check docs/prototype-parts.md
 copperhead parts check docs/prototype-parts.md --output docs/prototype-parts.check.md
 ```
 
-It queries the configured supplier, requires an exact returned MPN, and reports
-stock, lifecycle, pricing, and datasheet availability under clear `Available
-now`, `Not available`, and `Needs review` headings. Zero/insufficient stock,
+It queries the configured supplier, requires an exact returned MPN, and prints
+a compact terminal summary with stock, price, and only the groups that contain
+parts. `--output` saves a detailed Markdown report. Zero/insufficient stock,
 EOL lifecycle, or a missing exact MPN makes the command fail. Unknown lifecycle
 or a missing datasheet URL is a warning. It never changes `BOM.md` or
 `constraints.json`; `--output` is the only non-transcript write. Every network

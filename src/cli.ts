@@ -191,10 +191,10 @@ partsGroup
   .action(async (file: string, opts: { output?: string }) => {
     const repo = repoOf(program.opts());
     try {
-      const { runPartAudit } = await import('./commands/audit.js');
+      const { runPartAudit, formatPartCheckTerminal } = await import('./commands/audit.js');
       const result = await runPartAudit({ repoRoot: repo, input: file, ...(opts.output ? { output: opts.output } : {}) });
       if (program.opts().json) console.log(JSON.stringify(result, null, 2));
-      else console.log(result.report);
+      else console.log(formatPartCheckTerminal(result));
       process.exit(result.ok ? 0 : 1);
     } catch (err) {
       console.error((err as Error).message);

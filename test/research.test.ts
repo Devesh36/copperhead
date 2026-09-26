@@ -17,7 +17,7 @@ import { recordPartSelection } from '../src/research/selection.js';
 import { saveConstraint } from '../src/memory/constraints.js';
 import { ObligationsLedger } from '../src/agent/ledger.js';
 import { buildSystemPrompt } from '../src/agent/prompts.js';
-import { AuditError, parsePartAuditInput, runPartAudit } from '../src/commands/audit.js';
+import { AuditError, formatPartCheckTerminal, parsePartAuditInput, runPartAudit } from '../src/commands/audit.js';
 import { HANDLERS } from '../src/capabilities/handlers.js';
 import { parseBomTable } from '../src/memory/bom-table.js';
 
@@ -455,6 +455,11 @@ describe('live part audit command', () => {
     expect(result.ok).toBe(true);
     expect(result.findings).toMatchObject([{ refdes: 'R1', mpn: 'TEST-1', requiredQuantity: 10, status: 'pass', part: { stockTotal: 25 } }]);
     expect(await readFile(path.join(repo, 'audit-report.md'), 'utf8')).toContain('| R1 | TEST-1 | 10 | PASS | 25 | active |');
+    const terminal = formatPartCheckTerminal(result);
+    expect(terminal).toContain('Available (1)');
+    expect(terminal).toContain('Stock: 25 (need 10) · Price: 0.12 @ 1');
+    expect(terminal).toContain('Report: audit-report.md');
+    expect(terminal).not.toContain('| Refdes |');
     expect(await readFile(path.join(result.transcriptDir, 'transcript.jsonl'), 'utf8')).toContain('network-request');
     expect(existsSync(path.join(repo, '.copperhead', 'constraints.json'))).toBe(false);
   });
@@ -472,6 +477,7 @@ describe('live part audit command', () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings[0]).toMatchObject({ status: 'failure', issues: ['exact MPN was not returned by the selected provider'] });
+    expect(formatPartCheckTerminal(result)).toContain('Not available (1)');
   });
 
   it('surfaces provider outages instead of reporting parts unavailable', async () => {
@@ -501,6 +507,11 @@ describe('live part audit command', () => {
     const review = result.report.split('## Needs review')[1]!.split('## Detail')[0]!;
     expect(available).not.toContain('TEST-1');
     expect(review).toContain('TEST-1');
+    expect(result.report).toContain('**Outcome:** NEEDS REVIEW');
+    const terminal = formatPartCheckTerminal(result);
+    expect(terminal).toContain('Needs review (1)');
+    expect(terminal).toContain('Stock: 25');
+    expect(terminal).not.toContain('Available (0)');
   });
 
   it('requires a delimited MPN table and validates required quantities', () => {

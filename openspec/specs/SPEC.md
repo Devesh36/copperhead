@@ -291,9 +291,10 @@ copperhead skill run <name> [--scope power|all] [--model …]
 copperhead parts check <file> [--output report.md]
     Read a repository-relative Markdown table with an `MPN` column and
     optionally `Refdes` / `Required qty`; query the explicitly enabled part
-    provider without an LLM; report exact-MPN availability, stock, lifecycle,
-    price, and datasheet URL. The default is read-only except for its ignored
-    network transcript. `--output` writes the report inside the repository.
+    provider without an LLM; print a compact terminal summary of exact-MPN
+    availability, stock, price, and any missing evidence. The default is
+    read-only except for its ignored network transcript. `--output` writes a
+    detailed Markdown report inside the repository.
     This command is live-network by design; `check` remains offline.
 
 copperhead check [--strict-sourcing]   (alias: copperhead verify)
@@ -521,8 +522,11 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
   lifecycle, when `parts check` runs, then it exits non-zero and names the
   failing row. Unknown lifecycle and absent datasheet URL are warnings.
 - **AC-2a.4** Given `--output <path>`, when `parts check` runs, then it writes
-  the same Markdown report under the repository root; a path outside the root
-  is rejected.
+  a detailed Markdown report under the repository root; a path outside the
+  root is rejected. The terminal summary names the saved report.
+- **AC-2a.5** Terminal output shows counts and only nonempty result groups,
+  with stock, required quantity, price, and reasons per part. A warning does
+  not appear as an unqualified PASS. `--json` retains the structured result.
 
 ### AC-3 · `copperhead do` — core loop
 

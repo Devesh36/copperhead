@@ -109,8 +109,9 @@ repository-contained Markdown tables with a required `MPN` column and optional
 existing egress module, and requires the provider to return the exact MPN before
 reporting supplier data. It fails on a missing exact result, zero/insufficient
 stock, or EOL lifecycle; unknown lifecycle and missing datasheet metadata are
-warnings. It does not select a part, write sourcing snapshots, or modify BOM;
-`--output` explicitly writes a Markdown report. A normal run writes only the
+warnings. Terminal output shows a concise summary and only nonempty groups;
+`--output` explicitly writes a detailed Markdown report. It does not select a
+part, write sourcing snapshots, or modify BOM. A normal run writes only the
 ignored transcript required by D1. This gives engineers a quick live gate while
 preserving `check` as a no-network, CI-safe validator of saved evidence.
 
