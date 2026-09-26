@@ -288,7 +288,7 @@ copperhead skill run <name> [--scope power|all] [--model …]
     Run a skill (currently `generate-report`) via the nested sub-run. Needs a
     model, same as `do`. Does not snapshot or commit.
 
-copperhead audit <file> [--output report.md]
+copperhead parts check <file> [--output report.md]
     Read a repository-relative Markdown table with an `MPN` column and
     optionally `Refdes` / `Required qty`; query the explicitly enabled part
     provider without an LLM; report exact-MPN availability, stock, lifecycle,
@@ -507,20 +507,20 @@ Format: Given / When / Then. "Fixture" = the open-telegraph repo (or the tiny te
 - **AC-2.6** Given sourcing snapshots, `check` validates them and cached datasheet citations without reading provider credentials or making any network call.
 - **AC-2.7** A stale, missing, or zero-stock sourcing snapshot warns without failing by default and fails under `--strict-sourcing`; EOL/obsolete lifecycle and broken citations fail in both modes.
 
-### AC-2a · `copperhead audit`
+### AC-2a · `copperhead parts check`
 
 - **AC-2a.1** Given `research.enabled: true` and a Markdown table containing
-  an `MPN` column, when `audit` runs, then it makes only allowlisted
+  an `MPN` column, when `parts check` runs, then it makes only allowlisted
   egress requests through the research boundary, makes zero LLM calls, and
   records the request log in a run transcript.
 - **AC-2a.2** Given a returned part whose MPN exactly matches the requested
-  MPN and whose stock satisfies `Required qty`, when `audit` runs, then
+  MPN and whose stock satisfies `Required qty`, when `parts check` runs, then
   it reports stock, lifecycle, price, and datasheet availability without
   changing BOM.md or constraints.json.
 - **AC-2a.3** Given a missing exact MPN, zero/insufficient stock, or EOL
-  lifecycle, when `audit` runs, then it exits non-zero and names the
+  lifecycle, when `parts check` runs, then it exits non-zero and names the
   failing row. Unknown lifecycle and absent datasheet URL are warnings.
-- **AC-2a.4** Given `--output <path>`, when `audit` runs, then it writes
+- **AC-2a.4** Given `--output <path>`, when `parts check` runs, then it writes
   the same Markdown report under the repository root; a path outside the root
   is rejected.
 

@@ -102,7 +102,7 @@ Extracted datasheet text and search snippets are untrusted input. The system pro
 
 ### D11. Model-free, non-mutating live part audits
 
-`copperhead audit <file>` is a deterministic CLI command, deliberately
+`copperhead parts check <file>` is a deterministic CLI command, deliberately
 separate from both the agent tool and offline `check`. It reads only
 repository-contained Markdown tables with a required `MPN` column and optional
 `Refdes`/`Required qty`, calls the configured `PartDataProvider` through the

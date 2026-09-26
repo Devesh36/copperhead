@@ -117,7 +117,7 @@ copperhead init [--path hardware/]   # scaffold docs/ from an existing schematic
 copperhead do "<change request>"     # the core loop: propose, edit, verify, propagate, commit
 copperhead skill list                # registered skills (no LLM)
 copperhead skill run generate-report # read-only design report (needs a model)
-copperhead audit parts.md            # live, model-free supplier audit (research opt-in)
+copperhead parts check parts.md      # live, model-free supplier availability check (research opt-in)
 copperhead check --strict-sourcing   # offline sourceability gate (optional)
 copperhead check                     # ERC + DRC + doc-drift + spec validation; no LLM calls (alias: verify)
 copperhead doctor                    # env preflight: node, kicad-cli, git, openspec, provider credential; no LLM/network
@@ -162,9 +162,9 @@ cited section promotes the BOM row to `VERIFIED(datasheet)`. ERC/DRC and the
 obligations ledger still gate the run, while later `check` invocations validate
 the saved sourcing and citation evidence entirely offline.
 
-### Live parts audit
+### Live parts availability check
 
-`copperhead audit <file>` is the deterministic, live companion to the
+`copperhead parts check <file>` is the deterministic, live companion to the
 offline `check` command. It needs `research.enabled: true`, but no model or
 JLCSearch credential. The input is a repository-relative Markdown table with
 an `MPN` column and optional `Refdes` and `Required qty` columns:
@@ -176,8 +176,8 @@ an `MPN` column and optional `Refdes` and `Required qty` columns:
 ```
 
 ```bash
-copperhead audit docs/prototype-parts.md
-copperhead audit docs/prototype-parts.md --output docs/prototype-parts.audit.md
+copperhead parts check docs/prototype-parts.md
+copperhead parts check docs/prototype-parts.md --output docs/prototype-parts.check.md
 ```
 
 It queries the configured supplier, requires an exact returned MPN, and reports

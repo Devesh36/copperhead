@@ -180,9 +180,13 @@ program
   .option('--strict-sourcing', 'treat stale/zero-stock/missing sourcing evidence as failures')
   .action(checkAction);
 
-program
-  .command('audit <file>')
-  .description('live, model-free supplier availability audit (requires research.enabled)')
+const partsGroup = program
+  .command('parts')
+  .description('research and check electronic parts');
+
+partsGroup
+  .command('check <file>')
+  .description('check live supplier availability for a parts list (requires research.enabled)')
   .option('--output <path>', 'write the Markdown report to this repo-relative path')
   .action(async (file: string, opts: { output?: string }) => {
     const repo = repoOf(program.opts());

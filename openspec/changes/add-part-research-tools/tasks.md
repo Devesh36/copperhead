@@ -45,7 +45,7 @@
 - [x] 5.3 Offline sourceability validation in `check`: snapshot presence per MPN row, lifecycle not EOL, nonzero stock at retrieval, staleness vs `stalenessDays`; warnings by default, `--strict-sourcing` promotes to failures; EOL flagged per truth-precedence, never silently resolved
 - [x] 5.4 `VERIFIED(datasheet)` upgrade logic in BOM handling: upgrade only when every selection-driving parameter cites a passing citation; otherwise `UNVERIFIED` stands
 - [x] 5.5 Regression: AC-2.1 no-network assertion still passes with research configured (check makes zero network calls)
-- [x] 5.6 Add `audit <file>`: deterministic, model-free exact-MPN live lookup through the research egress boundary; read-only except transcript and explicit `--output`; sourceability snapshots remain untouched
+- [x] 5.6 Add `parts check <file>`: deterministic, model-free exact-MPN live lookup through the research egress boundary; read-only except transcript and explicit `--output`; sourceability snapshots remain untouched
 
 ## 6. Scenario tests (map 1:1 to delta specs)
 
